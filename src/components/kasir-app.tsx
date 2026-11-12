@@ -536,7 +536,7 @@ export function KasirApp() {
       const height = Math.ceil(Math.max(node.scrollHeight, bounds.height));
       const image = await toPng(node, {
         width, height, canvasWidth: width, canvasHeight: height,
-        pixelRatio: 2, backgroundColor: "#fff",
+        pixelRatio: 2, backgroundColor: "#fff", style: { margin: "0" },
       });
       if (kind === "png") {
         const anchor = document.createElement("a");

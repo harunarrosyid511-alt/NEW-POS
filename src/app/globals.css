@@ -384,16 +384,18 @@ td strong, .table-subtext { display: block; }
 .help-list li > span { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 50%; color: #155e30; background: #e6f4e9; font-size: 12px; font-weight: 800; }
 .help-list p { margin: 2px 0 0; color: #344138; font-size: 14px; }
 .receipt-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
-.receipt-paper { width: min(100%, 350px); margin: 0 auto; padding: 17px; border: 1px dashed #aeb8af; color: #171d19; background: white; font-family: "Courier New", monospace; font-size: 11px; }
-.receipt-paper h2 { margin: 0; text-align: center; font-size: 15px; }
-.receipt-paper > p { margin: 3px 0; overflow-wrap: anywhere; text-align: center; }
-.receipt-divider { margin: 9px 0; border-top: 1px dashed #707a72; }
-.receipt-item { display: grid; min-width: 0; gap: 2px; margin: 8px 0; }
+.receipt-paper { width: min(100%, 350px); margin: 0 auto; padding: 14px; border: 1px solid #dce5dc; color: #171d19; background: white; font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 500; line-height: 1.45; }
+.receipt-paper h2 { margin: 0; text-align: center; font-size: 16px; font-weight: 800; line-height: 1.3; }
+.receipt-paper > p { margin: 4px 0; overflow-wrap: anywhere; text-align: center; }
+.receipt-divider { margin: 8px 0; border-top: 1px dashed #707a72; }
+.receipt-item { display: grid; min-width: 0; gap: 3px; margin: 9px 0; }
 .receipt-item > * { min-width: 0; overflow-wrap: anywhere; }
-.receipt-item span:nth-child(2) { color: #374139; }
-.receipt-item strong { justify-self: end; }
-.receipt-row { display: flex; justify-content: space-between; gap: 8px; margin: 5px 0; }
+.receipt-item span:first-child { font-weight: 700; }
+.receipt-item span:nth-child(2) { color: #374139; font-size: 11px; }
+.receipt-item strong { justify-self: end; font-weight: 700; }
+.receipt-row { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0; }
 .receipt-row > span { min-width: 0; overflow-wrap: anywhere; }
+.receipt-row > span:last-child { text-align: right; }
 .receipt-strong { font-size: 13px; font-weight: 800; }
 .receipt-status { margin: 11px auto; width: fit-content; padding: 4px 11px; border: 2px solid currentColor; font-weight: 800; }
 .receipt-status.paid { color: #176536; }
