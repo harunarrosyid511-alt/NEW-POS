@@ -6,6 +6,13 @@ export const metadata: Metadata = {
   title: "Kasir Toko Kelontong",
   description: "Aplikasi kasir sederhana untuk toko kelontong.",
   applicationName: "Kasir Toko",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", type: "image/png", sizes: "180x180" }],
+  },
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Kasir Toko" },
 };
 

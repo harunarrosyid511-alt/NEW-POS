@@ -2,6 +2,7 @@
 
 import { toPng } from "html-to-image";
 import jsPDF from "jspdf";
+import NextImage from "next/image";
 import {
   useCallback,
   useEffect,
@@ -260,7 +261,7 @@ function AuthPanel() {
     <main className="auth-page">
       <section className="auth-panel">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">K</div>
+          <NextImage className="brand-mark" src="/logo.png" width={512} height={512} alt="" aria-hidden="true" />
           <div><strong>Kasir Toko</strong><span>Kelontong</span></div>
         </div>
         <p className="eyebrow">CATATAN TOKO, LEBIH RAPI</p>
@@ -823,7 +824,7 @@ export function KasirApp() {
     <div className={`app-shell ${screen === "Kasir" ? "app-shell-pos" : ""}`}>
       <aside className="sidebar">
         <button className="brand-lockup brand-home" onClick={() => setScreen("Kasir")}>
-          <div className="brand-mark" aria-hidden="true">K</div>
+          <NextImage className="brand-mark" src="/logo.png" width={512} height={512} alt="" aria-hidden="true" />
           <div><strong>Kasir Toko</strong><span>Kelontong</span></div>
         </button>
         <div className="store-label"><span>TOKO AKTIF</span><strong>{store?.name ?? "Memuat toko..."}</strong></div>

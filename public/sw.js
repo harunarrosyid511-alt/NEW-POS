@@ -1,10 +1,10 @@
-const CACHE_NAME = "kasir-toko-v1";
+const CACHE_NAME = "kasir-toko-v2";
 const OFFLINE_URL = "/offline";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll([OFFLINE_URL, "/icon-192.svg"]))
+      .then((cache) => cache.addAll([OFFLINE_URL, "/logo.png", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"]))
       .then(() => self.skipWaiting()),
   );
 });

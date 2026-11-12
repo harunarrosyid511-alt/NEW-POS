@@ -61,16 +61,11 @@ a { color: inherit; }
 .brand-lockup { display: flex; align-items: center; gap: 11px; color: var(--ink); text-decoration: none; }
 .brand-home { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
 .brand-mark {
-  display: grid;
   width: 42px;
   height: 42px;
-  place-items: center;
   flex: 0 0 auto;
   border-radius: 13px;
-  color: white;
-  background: var(--green);
-  font-size: 21px;
-  font-weight: 800;
+  object-fit: cover;
 }
 .brand-lockup strong, .brand-lockup span { display: block; line-height: 1.25; }
 .brand-lockup strong { font-size: 15px; }
