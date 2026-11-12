@@ -92,13 +92,34 @@ async function fetchSaleItems(client: SupabaseClient, saleIds: string[]): Promis
   return rows;
 }
 
-const screens: { name: Screen; glyph: string }[] = [
-  { name: "Dashboard", glyph: "D" }, { name: "Kasir", glyph: "K" }, { name: "Barang", glyph: "B" },
-  { name: "Piutang", glyph: "P" }, { name: "Pelanggan", glyph: "L" }, { name: "Laporan", glyph: "R" },
-  { name: "Pengaturan", glyph: "S" },
+const screens: { name: Screen }[] = [
+  { name: "Dashboard" }, { name: "Kasir" }, { name: "Barang" }, { name: "Piutang" },
+  { name: "Pelanggan" }, { name: "Laporan" }, { name: "Pengaturan" },
 ];
 const categoriesFallback = ["Semua", "Sembako", "Minuman", "Snack", "Rokok", "Lainnya"];
 
+function MenuIcon({ name }: { name: Screen }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === "Dashboard" && <><rect x="3.5" y="3.5" width="7" height="7" rx="1" /><rect x="13.5" y="3.5" width="7" height="7" rx="1" /><rect x="3.5" y="13.5" width="7" height="7" rx="1" /><rect x="13.5" y="13.5" width="7" height="7" rx="1" /></>}
+    {name === "Kasir" && <><path d="M5 8h14v12H5zM8 8V5h8v3M8 12h8M8 16h4" /></>}
+    {name === "Barang" && <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9" /></>}
+    {name === "Piutang" && <><circle cx="12" cy="12" r="9" /><path d="M12 6.5v11m3-8c0-1.1-1.3-2-3-2s-3 .9-3 2 1.3 2 3 2 3 .9 3 2-1.3 2-3 2-3-.9-3-2" /></>}
+    {name === "Pelanggan" && <><circle cx="9" cy="8" r="3" /><path d="M3.5 20v-1.5a5.5 5.5 0 0 1 11 0V20M16 5.5a3 3 0 0 1 0 5.8m1.5 3a4.5 4.5 0 0 1 3 4.2V20" /></>}
+    {name === "Laporan" && <><path d="M4 20V11h4v9M10 20V5h4v15M16 20v-7h4v7M3 20.5h18" /></>}
+    {name === "Pengaturan" && <><path d="M12 3.5 14 4l1 2.2 2 .8 2.2-.5 1.4 2.4-1.2 1.9.2 2.2 1.3 1.8-1.4 2.4-2.2-.5-2 .8-1 2.2-2 .5-2-.5-1-2.2-2-.8-2.2.5-1.4-2.4 1.2-1.9-.2-2.2-1.3-1.8 1.4-2.4 2.2.5 2-.8 1-2.2 2-.5Z" /><circle cx="12" cy="12" r="3" /></>}
+  </svg>;
+}
+
+function CategoryIcon({ name }: { name: string }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === "Semua" && <><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></>}
+    {name === "Sembako" && <><path d="M4 9h16l-1.5 10h-13L4 9ZM3 6h18M8 9v10m8-10v10M10 6l2-3 2 3" /></>}
+    {name === "Minuman" && <><path d="M6 4h12l-1 16H7L6 4ZM6.5 8h11M9 2v2m6-2v2" /></>}
+    {name === "Snack" && <><path d="M6 4h12l1 16H5L6 4ZM8 8h8M9 12h6m-5 4h4" /></>}
+    {name === "Rokok" && <><path d="M3 14h15v4H3zM18 14h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2M6 11V8m4 3V6m4 5V8" /></>}
+    {!["Semua", "Sembako", "Minuman", "Snack", "Rokok"].includes(name) && <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>}
+  </svg>;
+}
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "Ada kendala. Silakan coba lagi.";
 }
@@ -804,7 +825,7 @@ export function KasirApp() {
         <div className="store-label"><span>TOKO AKTIF</span><strong>{store?.name ?? "Memuat toko..."}</strong></div>
         <nav className="side-nav" aria-label="Menu utama">
           {screens.map((item) => <button key={item.name} className={`nav-item ${screen === item.name ? "active" : ""}`} onClick={() => setScreen(item.name)}>
-            <span className="nav-glyph" aria-hidden="true">{item.glyph}</span>{item.name}
+            <span className="nav-glyph"><MenuIcon name={item.name} /></span>{item.name}
           </button>)}
         </nav>
         <div className="sidebar-bottom">
@@ -840,7 +861,7 @@ export function KasirApp() {
           <div className="product-area">
             <div className="search-row">
               <label className="search-box">
-                <span aria-hidden="true">⌕</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 4.5 4.5" /></svg>
                 <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cari nama barang atau barcode..." aria-label="Cari nama barang atau barcode" />
                 <kbd>/</kbd>
               </label>
@@ -850,7 +871,7 @@ export function KasirApp() {
               {categories.map((name) => {
                 const count = name === "Semua" ? products.length : products.filter((product) => product.category_name === name).length;
                 return <button key={name} className={`category-chip ${category === name ? "selected" : ""}`} onClick={() => setCategory(name)}>
-                  <span className="category-mark" aria-hidden="true">{name === "Semua" ? "S" : name.slice(0, 1).toLocaleUpperCase("id")}</span>
+                  <span className="category-mark"><CategoryIcon name={name} /></span>
                   <span className="category-copy">{name}<small>{count} barang</small></span>
                 </button>;
               })}
@@ -867,10 +888,13 @@ export function KasirApp() {
             }}>Isi contoh barang</button></>} /> : null}
             {products.length > 0 && filteredProducts.length === 0 && <EmptyState title="Barang tidak ditemukan" description="Coba kata pencarian lain atau pilih kategori Semua." action={<button className="button button-quiet" onClick={() => { setSearch(""); setCategory("Semua"); }}>Tampilkan semua barang</button>} />}
             <div className="product-grid">
-              {filteredProducts.map((product) => <article className="product-card" key={product.id}>
+              {filteredProducts.map((product) => {
+                const inCart = cart.reduce((count, line) => count + (line.product.id === product.id ? line.quantity : 0), 0);
+                return <article className={`product-card ${inCart ? "product-card-selected" : ""}`} key={product.id}>
                 <div className={`product-stamp ${product.stock_base <= product.minimum_stock ? "stamp-low" : ""}`} aria-hidden="true">
                   {product.name.trim().slice(0, 1).toLocaleUpperCase("id")}
                 </div>
+                {inCart > 0 && <span className="product-in-cart">{inCart} di keranjang</span>}
                 <div className="product-card-body">
                   <span className="product-category">{product.category_name}</span>
                   <h3>{product.name}</h3>
@@ -882,7 +906,8 @@ export function KasirApp() {
                     {product.stock_base <= 0 ? "Stok habis" : "Tambah"}
                   </button>
                 </div>
-              </article>)}
+              </article>;
+              })}
             </div>
           </div>
 
@@ -986,7 +1011,7 @@ export function KasirApp() {
 
       <nav className="bottom-nav" aria-label="Navigasi bawah">
         {screens.slice(0, 5).map((item) => <button key={item.name} className={screen === item.name ? "active" : ""} onClick={() => setScreen(item.name)}>
-          <span className="nav-glyph" aria-hidden="true">{item.glyph}</span><span>{item.name}</span>
+          <span className="nav-glyph"><MenuIcon name={item.name} /></span><span>{item.name}</span>
         </button>)}
       </nav>
       {screen === "Kasir" && cart.length > 0 && <button className="floating-cart" onClick={() => setCartOpen(true)}>
