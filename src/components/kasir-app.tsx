@@ -96,7 +96,7 @@ const screens: { name: Screen }[] = [
   { name: "Dashboard" }, { name: "Kasir" }, { name: "Barang" }, { name: "Piutang" },
   { name: "Pelanggan" }, { name: "Laporan" }, { name: "Pengaturan" },
 ];
-const categoriesFallback = ["Semua", "Sembako", "Minuman", "Snack", "Rokok", "Lainnya"];
+const categoriesFallback = ["Semua", "Sembako", "Makanan", "Minuman", "Snack", "Rokok", "Lainnya"];
 
 function MenuIcon({ name }: { name: Screen }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -114,10 +114,11 @@ function CategoryIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {name === "Semua" && <><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></>}
     {name === "Sembako" && <><path d="M4 9h16l-1.5 10h-13L4 9ZM3 6h18M8 9v10m8-10v10M10 6l2-3 2 3" /></>}
+    {name === "Makanan" && <><path d="M4 12h16a8 8 0 0 1-16 0ZM3 12h18M8 8c0-1.2.8-1.8.8-3m3.2 3c0-1.2.8-1.8.8-3m3.2 3c0-1.2.8-1.8.8-3" /></>}
     {name === "Minuman" && <><path d="M6 4h12l-1 16H7L6 4ZM6.5 8h11M9 2v2m6-2v2" /></>}
     {name === "Snack" && <><path d="M6 4h12l1 16H5L6 4ZM8 8h8M9 12h6m-5 4h4" /></>}
     {name === "Rokok" && <><path d="M3 14h15v4H3zM18 14h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2M6 11V8m4 3V6m4 5V8" /></>}
-    {!["Semua", "Sembako", "Minuman", "Snack", "Rokok"].includes(name) && <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>}
+    {!["Semua", "Sembako", "Makanan", "Minuman", "Snack", "Rokok"].includes(name) && <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>}
   </svg>;
 }
 function messageOf(error: unknown): string {
@@ -326,6 +327,7 @@ export function KasirApp() {
   const [paymentMethod, setPaymentMethod] = useState("tunai");
   const [payOldDebt, setPayOldDebt] = useState(false);
   const [customerDebt, setCustomerDebt] = useState(0);
+  const [processingPayment, setProcessingPayment] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
@@ -385,7 +387,7 @@ export function KasirApp() {
       const unitRows = (unitResult.data ?? []) as (Unit & { product_id: string })[];
       const productRows = (productResult.data ?? []) as Omit<Product, "category_name" | "units">[];
       const itemRows = await fetchSaleItems(supabase, recentSales.map((sale) => sale.id));
-      setCategories(["Semua", ...categoryRows.map((row) => row.name)]);
+      setCategories(["Semua", ...new Set([...categoryRows.map((row) => row.name), "Makanan"])]);
       setProducts(productRows.map((product) => ({
         ...product,
         category_name: categoryRows.find((row) => row.id === product.category_id)?.name ?? "Lainnya",
@@ -459,7 +461,7 @@ export function KasirApp() {
   }
 
   async function processPayment() {
-    if (!supabase || !cart.length) return;
+    if (!supabase || !cart.length || processingPayment) return;
     if (received < total && !customerId) {
       setNotice("Pilih pelanggan untuk mencatat sisa pembayaran sebagai hutang.");
       return;
@@ -468,30 +470,15 @@ export function KasirApp() {
       setNotice("Pilih pelanggan terlebih dahulu untuk membayar hutang lama.");
       return;
     }
-    let confirmedOldDebt = customerDebt;
-    if (payOldDebt && customerId) {
-      const { data: currentDebts, error: debtError } = await supabase.from("debts")
-        .select("balance").eq("customer_id", customerId).eq("status", "terbuka").gt("balance", 0);
-      if (debtError) { setNotice(debtError.message); return; }
-      confirmedOldDebt = (currentDebts ?? []).reduce((sum, debt) => sum + Number(debt.balance), 0);
-      setCustomerDebt(confirmedOldDebt);
-    }
-    const paidForSale = Math.min(received, total);
-    const oldDebtForSale = payOldDebt && received >= total
-      ? Math.min(confirmedOldDebt, Math.max(0, received - total)) : 0;
-    const confirmText = [
-      `Pembeli: ${customerName}`,
-      `Total belanja: ${rupiah(total)}`,
-      `Uang diterima: ${rupiah(received)}`,
-      `Untuk belanja: ${rupiah(paidForSale)}`,
-      `Bayar hutang lama: ${rupiah(oldDebtForSale)}`,
-      `Sisa hutang lama: ${rupiah(Math.max(0, confirmedOldDebt - oldDebtForSale))}`,
-      received < total ? `Sisa hutang belanja ini: ${rupiah(total - received)}` : `Kembalian: ${rupiah(Math.max(0, received - paidForSale - oldDebtForSale))}`,
-      "Lanjutkan proses pembayaran?",
-    ].join("\n");
-    if (!window.confirm(confirmText)) return;
+    setProcessingPayment(true);
     setNotice("");
     try {
+      if (payOldDebt && customerId) {
+        const { data: currentDebts, error: debtError } = await supabase.from("debts")
+          .select("balance").eq("customer_id", customerId).eq("status", "terbuka").gt("balance", 0);
+        if (debtError) throw debtError;
+        setCustomerDebt((currentDebts ?? []).reduce((sum, debt) => sum + Number(debt.balance), 0));
+      }
       const { data, error } = await supabase.rpc("process_sale", {
         p_customer_id: customerId || null,
         p_items: cart.map((line) => ({
@@ -521,9 +508,11 @@ export function KasirApp() {
       setCustomerId("");
       setCustomerQuery("");
       setCartOpen(false);
-      await loadData();
+      void loadData();
     } catch (error) {
       setNotice(messageOf(error));
+    } finally {
+      setProcessingPayment(false);
     }
   }
 
@@ -531,7 +520,13 @@ export function KasirApp() {
     const node = document.getElementById("receipt-paper");
     if (!node || !receipt) return;
     try {
-      const image = await toPng(node, { pixelRatio: 2, backgroundColor: "#fff" });
+      const bounds = node.getBoundingClientRect();
+      const width = Math.ceil(Math.max(node.scrollWidth, bounds.width));
+      const height = Math.ceil(Math.max(node.scrollHeight, bounds.height));
+      const image = await toPng(node, {
+        width, height, canvasWidth: width, canvasHeight: height,
+        pixelRatio: 2, backgroundColor: "#fff",
+      });
       if (kind === "png") {
         const anchor = document.createElement("a");
         anchor.download = `${receipt.invoice}.png`;
@@ -542,10 +537,9 @@ export function KasirApp() {
         imageElement.src = image;
         await imageElement.decode();
         const paperWidth = store?.receipt_width ?? 58;
-        const contentWidth = paperWidth - 4;
-        const contentHeight = contentWidth * imageElement.naturalHeight / imageElement.naturalWidth;
-        const pdf = new jsPDF({ unit: "mm", format: [paperWidth, contentHeight + 4] });
-        pdf.addImage(image, "PNG", 2, 2, contentWidth, contentHeight);
+        const contentHeight = paperWidth * imageElement.naturalHeight / imageElement.naturalWidth;
+        const pdf = new jsPDF({ unit: "mm", format: [paperWidth, contentHeight] });
+        pdf.addImage(image, "PNG", 0, 0, paperWidth, contentHeight);
         pdf.save(`${receipt.invoice}.pdf`);
       }
     } catch (error) {
@@ -926,24 +920,28 @@ export function KasirApp() {
               {cart.length === 0 && <div className="cart-empty"><span className="basket-mark" aria-hidden="true">+</span><strong>Keranjang masih kosong</strong><span>Pilih barang untuk mulai mencatat.</span></div>}
               {cart.map((line, index) => <div className="cart-line" key={`${line.product.id}-${line.unitId}`}>
                 <span className="cart-product-mark" aria-hidden="true">{line.product.name.trim().slice(0, 1).toLocaleUpperCase("id")}</span>
-                <div className="cart-line-info"><strong>{line.product.name}</strong><span>{rupiah(line.price)} / {line.unitName}</span></div>
-                <div className="cart-line-tools">
-                  {line.product.units.length > 0 && <select aria-label={`Satuan ${line.product.name}`} value={line.unitId} onChange={(event) => {
-                    const unit = line.product.units.find((item) => item.id === event.target.value);
-                    updateLine(index, { unitId: unit?.id ?? "", unitName: unit?.name ?? line.product.base_unit, factor: unit?.conversion_factor ?? 1, price: Number(unit?.sell_price ?? line.product.sell_price) });
-                  }}>
-                    <option value="">/{line.product.base_unit}</option>
-                    {line.product.units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
-                  </select>}
-                  <div className="quantity-control">
-                    <button aria-label={`Kurangi ${line.product.name}`} onClick={() => line.quantity <= 1
-                      ? setCart((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                      : updateLine(index, { quantity: line.quantity - 1 })}>−</button>
-                    <span>{line.quantity}</span>
-                    <button aria-label={`Tambah ${line.product.name}`} onClick={() => updateLine(index, { quantity: line.quantity + 1 })}>+</button>
+                <div className="cart-line-content">
+                  <div className="cart-line-info"><strong>{line.product.name}</strong><span>{rupiah(line.price)} / {line.unitName}</span></div>
+                  <div className="cart-line-bottom">
+                    <div className="cart-line-tools">
+                      {line.product.units.length > 0 && <select aria-label={`Satuan ${line.product.name}`} value={line.unitId} onChange={(event) => {
+                        const unit = line.product.units.find((item) => item.id === event.target.value);
+                        updateLine(index, { unitId: unit?.id ?? "", unitName: unit?.name ?? line.product.base_unit, factor: unit?.conversion_factor ?? 1, price: Number(unit?.sell_price ?? line.product.sell_price) });
+                      }}>
+                        <option value="">/{line.product.base_unit}</option>
+                        {line.product.units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                      </select>}
+                      <div className="quantity-control">
+                        <button aria-label={`Kurangi ${line.product.name}`} onClick={() => line.quantity <= 1
+                          ? setCart((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                          : updateLine(index, { quantity: line.quantity - 1 })}>−</button>
+                        <span>{line.quantity}</span>
+                        <button aria-label={`Tambah ${line.product.name}`} onClick={() => updateLine(index, { quantity: line.quantity + 1 })}>+</button>
+                      </div>
+                    </div>
+                    <strong className="cart-line-total">{rupiah(line.quantity * line.price)}</strong>
                   </div>
                 </div>
-                <strong className="cart-line-total">{rupiah(line.quantity * line.price)}</strong>
               </div>)}
             </div>
             <div className="cart-summary">
@@ -966,7 +964,9 @@ export function KasirApp() {
               <div className="change-row"><span>{received < total ? "Sisa dibayar" : payOldDebt ? "Kembalian" : "Kembalian"}</span><strong>{rupiah(Math.max(0, received - total - (payOldDebt ? customerDebt : 0)))}</strong></div>
               {received < total && <p className="form-hint">Kurang {rupiah(total - received)}. Pilih pelanggan untuk mencatat hutang.</p>}
               {payOldDebt && customerDebt > 0 && <p className="form-hint">Pembayaran hutang lama memakai kelebihan uang setelah belanja dibayar.</p>}
-              <button className="button button-primary button-full process-button" disabled={!cart.length || loading} onClick={processPayment}>Proses Pembayaran</button>
+              <button className="button button-primary button-full process-button" disabled={!cart.length || processingPayment} onClick={processPayment}>
+                {processingPayment ? "Memproses pembayaran..." : "Proses Pembayaran"}
+              </button>
             </div>
           </aside>
         </section>}
@@ -1102,7 +1102,7 @@ export function KasirApp() {
           <h2>{store?.name ?? "Toko Saya"}</h2>
           {store?.address && <p>{store.address}</p>}{store?.phone && <p>{store.phone}</p>}
           <div className="receipt-divider" />
-          <p>No. {receipt.invoice}</p><p>{tanggal(receipt.time)}</p><p>Kasir: {session.user.email}</p><p>Pembeli: {receipt.customer}</p>
+          <p>No. {receipt.invoice}</p><p>{tanggal(receipt.time)}</p><p>Kasir: {store?.name ?? "Toko Saya"}</p><p>Pembeli: {receipt.customer}</p>
           <div className="receipt-divider" />
           {receipt.items.map((line, index) => <div className="receipt-item" key={`${line.product.id}-${index}`}>
             <span>{line.product.name}</span><span>{line.quantity} {line.unitName} × {rupiah(line.price)}</span><strong>{rupiah(line.quantity * line.price)}</strong>
