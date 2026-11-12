@@ -796,7 +796,7 @@ export function KasirApp() {
   if (!session) return <AuthPanel />;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${screen === "Kasir" ? "app-shell-pos" : ""}`}>
       <aside className="sidebar">
         <button className="brand-lockup brand-home" onClick={() => setScreen("Kasir")}>
           <div className="brand-mark" aria-hidden="true">K</div>
@@ -815,7 +815,7 @@ export function KasirApp() {
         </div>
       </aside>
 
-      <main className="main-area">
+      <main className={`main-area ${screen === "Kasir" ? "main-area-pos" : ""}`}>
         <header className="topbar">
           <div className="topbar-heading">
             <p className="eyebrow">{new Intl.DateTimeFormat("id-ID", { dateStyle: "full", timeZone: "Asia/Jakarta" }).format(new Date())}</p>
@@ -848,7 +848,13 @@ export function KasirApp() {
               <button className="button button-quiet" onClick={() => { setSearch(""); setCategory("Semua"); }}>Atur ulang</button>
             </div>
             <div className="category-row" aria-label="Filter kategori">
-              {categories.map((name) => <button key={name} className={`category-chip ${category === name ? "selected" : ""}`} onClick={() => setCategory(name)}>{name}</button>)}
+              {categories.map((name) => {
+                const count = name === "Semua" ? products.length : products.filter((product) => product.category_name === name).length;
+                return <button key={name} className={`category-chip ${category === name ? "selected" : ""}`} onClick={() => setCategory(name)}>
+                  <span className="category-mark" aria-hidden="true">{name === "Semua" ? "S" : name.slice(0, 1).toLocaleUpperCase("id")}</span>
+                  <span className="category-copy">{name}<small>{count} barang</small></span>
+                </button>;
+              })}
             </div>
             <div className="section-heading">
               <div><h2>Pilih barang</h2><p>{filteredProducts.length} barang tersedia</p></div>
@@ -895,6 +901,7 @@ export function KasirApp() {
             <div className="cart-lines">
               {cart.length === 0 && <div className="cart-empty"><span className="basket-mark" aria-hidden="true">+</span><strong>Keranjang masih kosong</strong><span>Pilih barang untuk mulai mencatat.</span></div>}
               {cart.map((line, index) => <div className="cart-line" key={`${line.product.id}-${line.unitId}`}>
+                <span className="cart-product-mark" aria-hidden="true">{line.product.name.trim().slice(0, 1).toLocaleUpperCase("id")}</span>
                 <div className="cart-line-info"><strong>{line.product.name}</strong><span>{rupiah(line.price)} / {line.unitName}</span></div>
                 <div className="cart-line-tools">
                   {line.product.units.length > 0 && <select aria-label={`Satuan ${line.product.name}`} value={line.unitId} onChange={(event) => {
