@@ -205,6 +205,26 @@ function AuthPanel() {
     }
   }
 
+  async function signInWithGoogle() {
+    setNote("");
+    setError("");
+    if (!supabase) {
+      setError("Sambungkan Supabase terlebih dahulu. Isi URL dan kunci publik di file .env.local.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin },
+      });
+      if (authError) throw authError;
+    } catch (reason) {
+      setError(messageOf(reason));
+      setBusy(false);
+    }
+  }
+
   const heading = mode === "register" ? "Buat akun toko" : mode === "forgot" ? "Lupa kata sandi?" : "Selamat datang";
   return (
     <main className="auth-page">
@@ -237,6 +257,12 @@ function AuthPanel() {
             {busy ? "Memproses..." : mode === "register" ? "Buat akun" : mode === "forgot" ? "Kirim tautan" : "Masuk"}
           </button>
         </form>
+        {mode !== "forgot" && <>
+          <div className="auth-divider"><span>atau</span></div>
+          <button className="button button-google button-full" type="button" onClick={() => void signInWithGoogle()} disabled={busy}>
+            {busy ? "Menghubungkan..." : "Lanjutkan dengan Google"}
+          </button>
+        </>}
         <div className="auth-links">
           {mode === "login" && <button className="text-button" onClick={() => { setMode("forgot"); setError(""); setNote(""); }}>Lupa kata sandi?</button>}
           <button className="text-button" onClick={() => { setMode(mode === "register" ? "login" : "register"); setError(""); setNote(""); }}>

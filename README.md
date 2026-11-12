@@ -21,11 +21,15 @@ Tanpa konfigurasi Supabase, aplikasi menampilkan petunjuk sambungan dan belum da
 ## Menyiapkan Supabase
 
 1. Buat proyek baru di [supabase.com](https://supabase.com), lalu simpan password database di tempat aman.
-2. Buka **Authentication → Sign In / Providers → Email** dan aktifkan email/password. Untuk percobaan lokal, pengaturan konfirmasi email dapat disesuaikan dengan kebijakan toko.
+2. Buka **Authentication → Sign In / Providers → Email** dan aktifkan email/password. Jika konfirmasi email aktif, pendaftar harus membuka tautan konfirmasi sebelum bisa masuk. Untuk percobaan lokal saja, konfirmasi email dapat dimatikan; untuk toko sungguhan, gunakan pengiriman email yang sudah dikonfigurasi.
 3. Buka **SQL Editor → New query**, salin seluruh isi [`supabase/schema.sql`](./supabase/schema.sql), lalu tekan **Run**.
 4. Buka **Project Settings → API**. Salin Project URL dan publishable key (atau anon key lama) ke `.env.local`. Jangan pernah memasukkan `service_role` key ke aplikasi browser.
-5. Jalankan aplikasi, pilih **Belum punya akun? Daftar**, isi email dan kata sandi. Trigger database membuat toko dan kategori awal untuk akun baru.
-6. Pada halaman Kasir yang masih kosong, tekan **Isi contoh barang** untuk mengisi contoh produk kelontong. Tombol ini hanya aktif jika daftar barang akun tersebut masih kosong.
+5. Untuk login Google, buat OAuth Client ID jenis **Web application** di Google Cloud Console. Masukkan URL callback Supabase yang ditampilkan di **Authentication → Providers → Google** sebagai **Authorized redirect URI** di Google Cloud. Salin Client ID dan Client secret dari Google ke pengaturan provider Google di Supabase, lalu aktifkan provider tersebut.
+6. Di **Authentication → URL Configuration**, jadikan alamat aplikasi sebagai **Site URL** dan tambahkan alamat lokal yang dipakai, misalnya `http://localhost:3000/**` dan `http://127.0.0.1:3000/**`, ke **Redirect URLs**. Tambahkan pula domain Vercel setelah deploy.
+7. Jalankan aplikasi. Pilih **Belum punya akun? Daftar** untuk email dan kata sandi, atau **Lanjutkan dengan Google**. Login Google dapat membuat akun baru; toko awalnya bernama “Toko Saya” dan namanya dapat diubah dari Pengaturan.
+8. Pada halaman Kasir yang masih kosong, tekan **Isi contoh barang** untuk mengisi contoh produk kelontong. Tombol ini hanya aktif jika daftar barang akun tersebut masih kosong.
+
+Jika pendaftaran email gagal, pastikan provider Email aktif, schema sudah dijalankan, dan cek pesan kesalahan yang ditampilkan aplikasi. Jika konfirmasi email aktif, periksa kotak masuk dan folder spam. Jika email sudah pernah didaftarkan, masuk atau gunakan **Lupa kata sandi?**. Login Google baru berfungsi setelah provider Google dan URL redirect di atas disiapkan.
 
 Skema membuat tabel toko, kategori, barang, satuan, pelanggan, supplier, transaksi, pembayaran, piutang, kulakan, dan pergerakan stok. Row Level Security membatasi baris ke toko pemilik akun. Fungsi `process_sale`, `collect_debt`, `cancel_sale`, `adjust_stock`, dan `process_purchase` memproses perubahan terkait secara atomik. Penjualan membayar hutang lama dari yang tertua jika opsi tersebut dipilih.
 
