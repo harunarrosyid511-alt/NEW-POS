@@ -21,11 +21,11 @@ Tanpa konfigurasi Supabase, aplikasi menampilkan petunjuk sambungan dan belum da
 ## Menyiapkan Supabase
 
 1. Buat proyek baru di [supabase.com](https://supabase.com), lalu simpan password database di tempat aman.
-2. Buka **Authentication → Sign In / Providers → Email** dan aktifkan email/password. Jika konfirmasi email aktif, pendaftar harus membuka tautan konfirmasi sebelum bisa masuk. Untuk percobaan lokal saja, konfirmasi email dapat dimatikan; untuk toko sungguhan, gunakan pengiriman email yang sudah dikonfigurasi.
+2. Buka **Authentication → Sign In / Providers → Email** dan aktifkan email/password. Jika konfirmasi email aktif, pendaftar harus membuka tautan konfirmasi sebelum bisa masuk. Tautan konfirmasi kembali ke alamat aplikasi yang sedang dipakai, jadi alamat tersebut harus masuk daftar **Redirect URLs**. Untuk percobaan lokal saja, konfirmasi email dapat dimatikan; untuk toko sungguhan, gunakan pengiriman email yang sudah dikonfigurasi.
 3. Buka **SQL Editor → New query**, salin seluruh isi [`supabase/schema.sql`](./supabase/schema.sql), lalu tekan **Run**.
 4. Buka **Project Settings → API**. Salin Project URL dan publishable key (atau anon key lama) ke `.env.local`. Jangan pernah memasukkan `service_role` key ke aplikasi browser.
 5. Untuk login Google, buat OAuth Client ID jenis **Web application** di Google Cloud Console. Masukkan URL callback Supabase yang ditampilkan di **Authentication → Providers → Google** sebagai **Authorized redirect URI** di Google Cloud. Salin Client ID dan Client secret dari Google ke pengaturan provider Google di Supabase, lalu aktifkan provider tersebut.
-6. Di **Authentication → URL Configuration**, jadikan alamat aplikasi sebagai **Site URL** dan tambahkan alamat lokal yang dipakai, misalnya `http://localhost:3000/**` dan `http://127.0.0.1:3000/**`, ke **Redirect URLs**. Tambahkan pula domain Vercel setelah deploy.
+6. Di **Authentication → URL Configuration**, jadikan domain produksi sebagai **Site URL**, misalnya `https://nama-aplikasi.vercel.app`. Tambahkan alamat produksi dan alamat lokal yang dipakai, misalnya `https://nama-aplikasi.vercel.app/**`, `http://localhost:3000/**`, dan `http://127.0.0.1:3000/**`, ke **Redirect URLs**. Jika alamat redirect tidak diizinkan, Supabase dapat kembali ke **Site URL**. Tambahkan juga domain preview Vercel bila login dari preview diperlukan.
 7. Jalankan aplikasi. Pilih **Belum punya akun? Daftar** untuk email dan kata sandi, atau **Lanjutkan dengan Google**. Login Google dapat membuat akun baru; toko awalnya bernama “Toko Saya” dan namanya dapat diubah dari Pengaturan.
 8. Pada halaman Kasir yang masih kosong, tekan **Isi contoh barang** untuk mengisi contoh produk kelontong. Tombol ini hanya aktif jika daftar barang akun tersebut masih kosong.
 
@@ -39,7 +39,7 @@ Skema membuat tabel toko, kategori, barang, satuan, pelanggan, supplier, transak
 2. Di Vercel, pilih **Add New → Project**, lalu impor repositori.
 3. Di **Environment Variables**, tambahkan `NEXT_PUBLIC_SUPABASE_URL` dan `NEXT_PUBLIC_SUPABASE_ANON_KEY` untuk environment yang digunakan.
 4. Tekan **Deploy**. Perintah build memakai konfigurasi Next.js bawaan.
-5. Di Supabase Authentication, tambahkan alamat situs Vercel pada **URL Configuration → Site URL** dan alamat lokal pada **Redirect URLs**. Setelah domain berubah, perbarui Site URL.
+5. Di Supabase Authentication, jadikan domain produksi Vercel sebagai **URL Configuration → Site URL** dan daftarkan domain produksi serta alamat lokal pada **Redirect URLs**. Redirect URL yang tidak terdaftar dapat diarahkan kembali ke Site URL. Setelah domain berubah, perbarui konfigurasi ini.
 
 ## Pasang sebagai PWA
 

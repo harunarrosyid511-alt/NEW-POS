@@ -206,7 +206,10 @@ function AuthPanel() {
     try {
       if (mode === "register") {
         const { data, error: authError } = await supabase.auth.signUp({
-          email, password, options: { data: { store_name: storeName.trim() || "Toko Saya" } },
+          email, password, options: {
+            data: { store_name: storeName.trim() || "Toko Saya" },
+            emailRedirectTo: window.location.origin,
+          },
         });
         if (authError) throw authError;
         if (!data.session) setNote("Akun dibuat. Periksa email untuk mengonfirmasi pendaftaran, lalu masuk.");
