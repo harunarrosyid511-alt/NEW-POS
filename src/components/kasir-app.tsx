@@ -28,6 +28,11 @@ type Store = {
   id: string; name: string; address: string | null; phone: string | null; receipt_note: string | null;
   receipt_width: number; default_min_stock: number; transfer_info: string | null;
 };
+function authRedirectUrl() {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://newposs.vercel.app";
+  return new URL(siteUrl).origin;
+}
+
 type Sale = {
   id: string; invoice_no: string; customer_id: string | null; total: number; status: string;
   created_at: string; payment_method: string; old_debt_paid: number; old_debt_remaining: number;
@@ -208,14 +213,14 @@ function AuthPanel() {
         const { data, error: authError } = await supabase.auth.signUp({
           email, password, options: {
             data: { store_name: storeName.trim() || "Toko Saya" },
-            emailRedirectTo: window.location.origin,
+            emailRedirectTo: authRedirectUrl(),
           },
         });
         if (authError) throw authError;
         if (!data.session) setNote("Akun dibuat. Periksa email untuk mengonfirmasi pendaftaran, lalu masuk.");
       } else if (mode === "forgot") {
         const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/`,
+          redirectTo: authRedirectUrl(),
         });
         if (authError) throw authError;
         setNote("Jika email terdaftar, tautan untuk mengatur ulang kata sandi akan dikirim.");
@@ -241,7 +246,7 @@ function AuthPanel() {
     try {
       const { error: authError } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: window.location.origin },
+        options: { redirectTo: authRedirectUrl() },
       });
       if (authError) throw authError;
     } catch (reason) {

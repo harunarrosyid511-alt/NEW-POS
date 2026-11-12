@@ -26,8 +26,9 @@ Tanpa konfigurasi Supabase, aplikasi menampilkan petunjuk sambungan dan belum da
 4. Buka **Project Settings → API**. Salin Project URL dan publishable key (atau anon key lama) ke `.env.local`. Jangan pernah memasukkan `service_role` key ke aplikasi browser.
 5. Untuk login Google, buat OAuth Client ID jenis **Web application** di Google Cloud Console. Masukkan URL callback Supabase yang ditampilkan di **Authentication → Providers → Google** sebagai **Authorized redirect URI** di Google Cloud. Salin Client ID dan Client secret dari Google ke pengaturan provider Google di Supabase, lalu aktifkan provider tersebut.
 6. Di **Authentication → URL Configuration**, jadikan domain produksi sebagai **Site URL**, misalnya `https://nama-aplikasi.vercel.app`. Tambahkan alamat produksi dan alamat lokal yang dipakai, misalnya `https://nama-aplikasi.vercel.app/**`, `http://localhost:3000/**`, dan `http://127.0.0.1:3000/**`, ke **Redirect URLs**. Jika alamat redirect tidak diizinkan, Supabase dapat kembali ke **Site URL**. Tambahkan juga domain preview Vercel bila login dari preview diperlukan.
-7. Jalankan aplikasi. Pilih **Belum punya akun? Daftar** untuk email dan kata sandi, atau **Lanjutkan dengan Google**. Login Google dapat membuat akun baru; toko awalnya bernama “Toko Saya” dan namanya dapat diubah dari Pengaturan.
-8. Pada halaman Kasir yang masih kosong, tekan **Isi contoh barang** untuk mengisi contoh produk kelontong. Tombol ini hanya aktif jika daftar barang akun tersebut masih kosong.
+7. Redirect autentikasi secara bawaan memakai `https://newposs.vercel.app`, termasuk saat aplikasi dibuka di localhost. Jika domain deployment berbeda, atur `NEXT_PUBLIC_SITE_URL` ke domain tersebut di Environment Variables Vercel lalu redeploy. Untuk menguji redirect lokal, atur variabel itu ke `http://localhost:3000` di `.env.local`.
+8. Jalankan aplikasi. Pilih **Belum punya akun? Daftar** untuk email dan kata sandi, atau **Lanjutkan dengan Google**. Login Google dapat membuat akun baru; toko awalnya bernama “Toko Saya” dan namanya dapat diubah dari Pengaturan.
+9. Pada halaman Kasir yang masih kosong, tekan **Isi contoh barang** untuk mengisi contoh produk kelontong. Tombol ini hanya aktif jika daftar barang akun tersebut masih kosong.
 
 Jika pendaftaran email gagal, pastikan provider Email aktif, schema sudah dijalankan, dan cek pesan kesalahan yang ditampilkan aplikasi. Jika konfirmasi email aktif, periksa kotak masuk dan folder spam. Jika email sudah pernah didaftarkan, masuk atau gunakan **Lupa kata sandi?**. Login Google baru berfungsi setelah provider Google dan URL redirect di atas disiapkan.
 
@@ -37,9 +38,9 @@ Skema membuat tabel toko, kategori, barang, satuan, pelanggan, supplier, transak
 
 1. Simpan proyek ini ke repositori Git milik Anda. Pastikan `.env.local` tidak diunggah.
 2. Di Vercel, pilih **Add New → Project**, lalu impor repositori.
-3. Di **Environment Variables**, tambahkan `NEXT_PUBLIC_SUPABASE_URL` dan `NEXT_PUBLIC_SUPABASE_ANON_KEY` untuk environment yang digunakan.
+3. Di **Environment Variables**, tambahkan `NEXT_PUBLIC_SUPABASE_URL` dan `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Jika domain produksi bukan `https://newposs.vercel.app`, tambahkan juga `NEXT_PUBLIC_SITE_URL` dengan URL domain produksi.
 4. Tekan **Deploy**. Perintah build memakai konfigurasi Next.js bawaan.
-5. Di Supabase Authentication, jadikan domain produksi Vercel sebagai **URL Configuration → Site URL** dan daftarkan domain produksi serta alamat lokal pada **Redirect URLs**. Redirect URL yang tidak terdaftar dapat diarahkan kembali ke Site URL. Setelah domain berubah, perbarui konfigurasi ini.
+5. Di Supabase Authentication, jadikan domain produksi Vercel sebagai **URL Configuration → Site URL** dan daftarkan domain produksi serta alamat lokal pada **Redirect URLs**. Redirect URL yang tidak terdaftar dapat diarahkan kembali ke Site URL. Setelah domain berubah, perbarui konfigurasi ini dan redeploy agar nilai `NEXT_PUBLIC_SITE_URL` terbaru digunakan.
 
 ## Pasang sebagai PWA
 
