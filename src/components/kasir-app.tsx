@@ -328,6 +328,7 @@ export function KasirApp() {
   const [payOldDebt, setPayOldDebt] = useState(false);
   const [customerDebt, setCustomerDebt] = useState(0);
   const [processingPayment, setProcessingPayment] = useState(false);
+  const [paymentStep, setPaymentStep] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
@@ -507,6 +508,7 @@ export function KasirApp() {
       setPayOldDebt(false);
       setCustomerId("");
       setCustomerQuery("");
+      setPaymentStep(false);
       setCartOpen(false);
       void loadData();
     } catch (error) {
@@ -798,7 +800,7 @@ export function KasirApp() {
   const lowStock = products.filter((product) => product.stock_base <= product.minimum_stock);
   const helpSteps: Record<Screen, string[]> = {
     Dashboard: ["Lihat ringkasan penjualan hari ini, jumlah transaksi, piutang, dan stok menipis.", "Grafik merangkum penjualan yang sudah tersimpan pada beberapa hari terakhir.", "Pilih menu di samping untuk membuka kasir, barang, pelanggan, piutang, laporan, atau pengaturan."],
-    Kasir: ["Cari barang atau pilih kategori, lalu tekan Tambah untuk memasukkannya ke keranjang.", "Pilih pelanggan jika ingin menyimpan nama pembeli atau mencatat pembayaran yang belum lunas.", "Isi uang diterima dan metode bayar, lalu tekan Proses Pembayaran. Stok akan berkurang otomatis."],
+    Kasir: ["Cari barang atau pilih kategori, lalu tekan Tambah untuk memasukkannya ke keranjang.", "Periksa nama pembeli, daftar barang, diskon, dan total. Tekan Lanjut ke pembayaran jika sudah sesuai.", "Pilih metode pembayaran dan isi uang yang diterima, lalu tekan Proses Pembayaran. Stok akan berkurang otomatis."],
     Barang: ["Tekan Tambah Barang untuk mencatat nama, kategori, harga, stok, dan satuan dasar.", "Gunakan tombol stok untuk koreksi dengan alasan. Perubahan tercatat di tab Riwayat Stok.", "Gunakan Kulakan untuk menambah stok dari supplier. Periksa jumlah dan harga sebelum menyimpan."],
     Piutang: ["Daftar ini hanya menampilkan hutang yang belum lunas, diurutkan dari tanggal tertua.", "Pilih Bayar/Cicil, masukkan nominal, lalu pilih tunai atau transfer.", "Pembayaran dipotong dari hutang terlama terlebih dahulu. Gunakan tombol WhatsApp untuk mengirim pengingat."],
     Pelanggan: ["Tekan Tambah Pelanggan lalu isi nama dan kontak yang tersedia.", "Gunakan kolom cari untuk menemukan pelanggan dari nama atau nomor HP.", "Data pelanggan membantu memilih nama pembeli di kasir dan mencatat hutang."],
@@ -905,17 +907,22 @@ export function KasirApp() {
             </div>
           </div>
 
-          <aside className={`cart-panel ${cartOpen ? "cart-panel-open" : ""}`}>
-            <div className="cart-heading"><div><h2>Keranjang</h2><p>{cart.length} jenis barang</p></div><button className="icon-button mobile-only" onClick={() => setCartOpen(false)} aria-label="Tutup keranjang">×</button></div>
-            <Field label="Nama pembeli">
+          <aside className={`cart-panel ${cartOpen ? "cart-panel-open" : ""} ${paymentStep ? "cart-panel-payment" : "cart-panel-cart"}`}>
+            <div className="cart-heading">
+              <div><h2>{paymentStep ? "Pembayaran" : "Keranjang"}</h2><p>{paymentStep ? "Langkah 2 dari 2 · Pilih cara pembayaran" : `Langkah 1 dari 2 · ${cart.length} jenis barang`}</p></div>
+              <button className="icon-button mobile-only" onClick={() => setCartOpen(false)} aria-label="Tutup keranjang">×</button>
+            </div>
+            {!paymentStep && <Field label="Nama pembeli">
               <input list="customer-list" value={customerQuery} onChange={(event) => selectCustomer(event.target.value)} placeholder="Pilih pelanggan atau Umum" />
               <datalist id="customer-list">{customers.map((customer) => <option key={customer.id} value={customer.name} />)}</datalist>
-            </Field>
-            {!customerId && <button className="text-button quick-customer" onClick={() => setCustomerDialog("new")}>+ Tambah pelanggan baru</button>}
-            {customerId && customerDebt > 0 && <div className="notice notice-warn debt-warning">
+            </Field>}
+            {!paymentStep && !customerId && <button className="text-button quick-customer" onClick={() => setCustomerDialog("new")}>+ Tambah pelanggan baru</button>}
+            {paymentStep && <div className="checkout-summary"><span>{cart.reduce((sum, line) => sum + line.quantity, 0)} barang untuk {customerName}</span><strong>{rupiah(total)}</strong></div>}
+            {paymentStep && customerId && customerDebt > 0 && <div className="notice notice-warn debt-warning">
               <span>{customerName} masih punya hutang {rupiah(customerDebt)}.</span>
               <label className="checkbox-row"><input type="checkbox" checked={payOldDebt} onChange={(event) => setPayOldDebt(event.target.checked)} />Bayar hutang lama sekalian</label>
             </div>}
+            {!paymentStep && <>
             <div className="cart-lines">
               {cart.length === 0 && <div className="cart-empty"><span className="basket-mark" aria-hidden="true">+</span><strong>Keranjang masih kosong</strong><span>Pilih barang untuk mulai mencatat.</span></div>}
               {cart.map((line, index) => <div className="cart-line" key={`${line.product.id}-${line.unitId}`}>
@@ -948,6 +955,12 @@ export function KasirApp() {
               <label className="summary-input"><span>Subtotal</span><strong>{rupiah(subtotal)}</strong></label>
               <label className="summary-input"><span>Diskon (Rp)</span><input type="number" min="0" max={subtotal} value={discount || ""} onChange={(event) => setDiscount(Number(event.target.value))} placeholder="0" /></label>
               <div className="summary-total"><span>Total belanja</span><strong>{rupiah(total)}</strong></div>
+              <button className="button button-primary button-full process-button" disabled={!cart.length} onClick={() => setPaymentStep(true)}>
+                Lanjut ke pembayaran
+              </button>
+            </div>
+            </>}
+            {paymentStep && <div className="payment-step-content">
               <div className="payment-options" role="group" aria-label="Metode pembayaran">
                 {["tunai", "transfer"].map((method) => <button key={method} className={`payment-option ${paymentMethod === method ? "chosen" : ""}`} onClick={() => setPaymentMethod(method)}>
                   <span aria-hidden="true">{method === "tunai" ? "Rp" : "TF"}</span>{method === "tunai" ? "Tunai" : "Transfer"}
@@ -967,7 +980,8 @@ export function KasirApp() {
               <button className="button button-primary button-full process-button" disabled={!cart.length || processingPayment} onClick={processPayment}>
                 {processingPayment ? "Memproses pembayaran..." : "Proses Pembayaran"}
               </button>
-            </div>
+              <button className="button button-quiet button-full" disabled={processingPayment} onClick={() => setPaymentStep(false)}>Kembali ke keranjang</button>
+            </div>}
           </aside>
         </section>}
 
@@ -1014,7 +1028,7 @@ export function KasirApp() {
           <span className="nav-glyph"><MenuIcon name={item.name} /></span><span>{item.name}</span>
         </button>)}
       </nav>
-      {screen === "Kasir" && cart.length > 0 && <button className="floating-cart" onClick={() => setCartOpen(true)}>
+      {screen === "Kasir" && cart.length > 0 && <button className="floating-cart" onClick={() => { setPaymentStep(false); setCartOpen(true); }}>
         Lihat keranjang ({cart.reduce((sum, line) => sum + line.quantity, 0)}) <strong>{rupiah(total)}</strong>
       </button>}
       <button className="help-button" onClick={() => setHelpOpen(true)} aria-label="Info dan bantuan">i</button>
