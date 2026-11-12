@@ -240,7 +240,6 @@ function AuthPanel() {
             mode === "register" ? "Buat ruang kerja toko Anda. Data setiap akun disimpan terpisah." :
               "Masukkan email akun untuk menerima tautan pengaturan ulang."}
         </p>
-        {!supabase && <div className="notice notice-warn">Supabase belum disambungkan. Isi .env.local mengikuti panduan di README.</div>}
         <form className="form-stack" onSubmit={submit}>
           {mode === "register" && <Field label="Nama toko">
             <input autoComplete="organization" value={storeName} onChange={(event) => setStoreName(event.target.value)} placeholder="Contoh: Warung Ibu" />
