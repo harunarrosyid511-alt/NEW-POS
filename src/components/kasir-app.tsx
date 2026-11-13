@@ -47,7 +47,8 @@ type CartLine = { product: Product; quantity: number; unitId: string; unitName: 
 type Receipt = {
   invoice: string; time: string; customer: string; items: CartLine[]; subtotal: number; discount: number;
   total: number; paymentMethod: string; received: number; oldDebtPaid: number; oldDebtRemaining: number;
-  change: number; status: string; isDebtPayment?: boolean; remainingCustomerDebt?: number;
+  cashPaid: number; transferPaid: number; change: number; status: string;
+  isDebtPayment?: boolean; remainingCustomerDebt?: number;
 };
 type DebtRow = {
   id: string; customer_id: string; balance: number; original_amount: number; sale_id: string;
@@ -60,12 +61,16 @@ type StockMovement = {
 };
 type PurchaseRow = {
   id: string; purchased_at: string; supplier_name: string | null; status: string; total: number;
+  paid_amount: number; purchase_payments?: PurchasePayment[] | null;
   purchase_items: { product_name: string; quantity: number; buy_price: number }[];
 };
+type PurchasePayment = { amount: number; payment_method: "tunai" | "transfer" };
+type SalePayment = { sale_id: string; payment_kind: string; amount: number; payment_method: "tunai" | "transfer" };
 type ExportRow = {
   created_at?: string; purchased_at?: string; name?: string; phone?: string | null; base_unit?: string;
   stock_base?: number; invoice_no?: string; status?: string; total?: number; customer_id?: string;
   balance?: number; product_id?: string; movement_type?: string; quantity_base?: number; supplier_name?: string | null;
+  paid_amount?: number; purchase_payments?: PurchasePayment[] | null;
 };
 type ReportPayload = {
   title: string; period: string; columns: string[]; rows: string[][]; summary: string;
@@ -96,6 +101,59 @@ async function fetchSaleItems(client: SupabaseClient, saleIds: string[]): Promis
     rows.push(...(data ?? []) as SaleItemRecord[]);
   }
   return rows;
+}
+
+async function fetchSalePayments(client: SupabaseClient, saleIds: string[]): Promise<SalePayment[]> {
+  const rows: SalePayment[] = [];
+  for (let offset = 0; offset < saleIds.length; offset += 100) {
+    const { data, error } = await client.from("payments")
+      .select("sale_id,payment_kind,amount,payment_method")
+      .in("sale_id", saleIds.slice(offset, offset + 100))
+      .eq("payment_kind", "penjualan");
+    if (error) throw error;
+    rows.push(...(data ?? []) as SalePayment[]);
+  }
+  return rows;
+}
+
+function paymentAmounts(payments: SalePayment[], saleId: string) {
+  return payments.filter((payment) => payment.sale_id === saleId).reduce((amounts, payment) => {
+    amounts[payment.payment_method] += Number(payment.amount);
+    return amounts;
+  }, { tunai: 0, transfer: 0 });
+}
+
+function paymentAmountsBySale(payments: SalePayment[]) {
+  const amounts = new Map<string, { tunai: number; transfer: number }>();
+  for (const payment of payments) {
+    const total = amounts.get(payment.sale_id) ?? { tunai: 0, transfer: 0 };
+    total[payment.payment_method] += Number(payment.amount);
+    amounts.set(payment.sale_id, total);
+  }
+  return amounts;
+}
+
+function purchasePaymentAmounts(purchase: Pick<PurchaseRow, "purchase_payments">) {
+  return (purchase.purchase_payments ?? []).reduce((amounts, payment) => {
+    amounts[payment.payment_method] += Number(payment.amount);
+    return amounts;
+  }, { tunai: 0, transfer: 0 });
+}
+
+function paymentMethodLabel(cashAmount: number, transferAmount: number) {
+  if (cashAmount > 0 && transferAmount > 0) return "Tunai + transfer";
+  if (transferAmount > 0) return "Transfer";
+  if (cashAmount > 0) return "Tunai";
+  return "Belum dibayar";
+}
+
+function purchasePaymentLabel(purchase: PurchaseRow) {
+  if (Number(purchase.total) === 0) return "Tidak ada tagihan";
+  const amounts = purchasePaymentAmounts(purchase);
+  if (Number(purchase.paid_amount) > 0 && amounts.tunai === 0 && amounts.transfer === 0) {
+    return "Rincian lama tidak tersedia";
+  }
+  return paymentMethodLabel(amounts.tunai, amounts.transfer);
 }
 
 const screens: { name: Screen }[] = [
@@ -321,6 +379,7 @@ export function KasirApp() {
   const [categories, setCategories] = useState<string[]>(categoriesFallback);
   const [sales, setSales] = useState<Sale[]>([]);
   const [saleItems, setSaleItems] = useState<SaleItemRecord[]>([]);
+  const [salePayments, setSalePayments] = useState<SalePayment[]>([]);
   const [debts, setDebts] = useState<DebtRow[]>([]);
   const [allDebts, setAllDebts] = useState<DebtRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -333,7 +392,9 @@ export function KasirApp() {
   const [customerId, setCustomerId] = useState("");
   const [discount, setDiscount] = useState(0);
   const [received, setReceived] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState("tunai");
+  const [cashReceived, setCashReceived] = useState(0);
+  const [transferReceived, setTransferReceived] = useState(0);
+  const [paymentMethod, setPaymentMethod] = useState<"tunai" | "transfer" | "campuran">("tunai");
   const [payOldDebt, setPayOldDebt] = useState(false);
   const [customerDebt, setCustomerDebt] = useState(0);
   const [processingPayment, setProcessingPayment] = useState(false);
@@ -345,6 +406,10 @@ export function KasirApp() {
   const [customerDialog, setCustomerDialog] = useState<Customer | null | "new">(null);
   const [stockDialog, setStockDialog] = useState<Product | null>(null);
   const [purchaseDialog, setPurchaseDialog] = useState(false);
+  const [purchaseTotalPreview, setPurchaseTotalPreview] = useState(0);
+  const [purchasePaymentDialog, setPurchasePaymentDialog] = useState<PurchaseRow | null>(null);
+  const [purchaseRefreshKey, setPurchaseRefreshKey] = useState(0);
+  const [processingPurchasePayment, setProcessingPurchasePayment] = useState(false);
   const [debtDialog, setDebtDialog] = useState<Customer | null>(null);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
 
@@ -397,6 +462,7 @@ export function KasirApp() {
       const unitRows = (unitResult.data ?? []) as (Unit & { product_id: string })[];
       const productRows = (productResult.data ?? []) as Omit<Product, "category_name" | "units">[];
       const itemRows = await fetchSaleItems(supabase, recentSales.map((sale) => sale.id));
+      const paymentRows = await fetchSalePayments(supabase, recentSales.map((sale) => sale.id));
       setCategories(["Semua", ...new Set([...categoryRows.map((row) => row.name), "Makanan"])]);
       setProducts(productRows.map((product) => ({
         ...product,
@@ -406,6 +472,7 @@ export function KasirApp() {
       setCustomers((customerResult.data ?? []) as Customer[]);
       setSales(recentSales);
       setSaleItems(itemRows);
+      setSalePayments(paymentRows);
       const customerRows = (customerResult.data ?? []) as Customer[];
       const debtRows = (debtResult.data ?? []) as (DebtRow & { sales: { invoice_no: string }[] | null })[];
       const mappedDebts = debtRows.map((debt) => ({
@@ -439,6 +506,9 @@ export function KasirApp() {
 
   const subtotal = cart.reduce((sum, line) => sum + line.quantity * line.price, 0);
   const total = Math.max(0, subtotal - Math.min(Math.max(0, discount), subtotal));
+  const paymentReceived = paymentMethod === "campuran"
+    ? cashReceived + transferReceived
+    : received;
   const customerName = customers.find((customer) => customer.id === customerId)?.name ?? "Umum";
   const filteredProducts = products.filter((product) => {
     const matchesText = `${product.name} ${product.barcode ?? ""}`.toLocaleLowerCase("id").includes(search.toLocaleLowerCase("id"));
@@ -472,7 +542,10 @@ export function KasirApp() {
 
   async function processPayment() {
     if (!supabase || !cart.length || processingPayment) return;
-    if (received < total && !customerId) {
+    const cashAmount = paymentMethod === "campuran" ? cashReceived : paymentMethod === "tunai" ? received : 0;
+    const transferAmount = paymentMethod === "campuran" ? transferReceived : paymentMethod === "transfer" ? received : 0;
+    const receivedAmount = cashAmount + transferAmount;
+    if (receivedAmount < total && !customerId) {
       setNotice("Pilih pelanggan untuk mencatat sisa pembayaran sebagai hutang.");
       return;
     }
@@ -489,24 +562,27 @@ export function KasirApp() {
         if (debtError) throw debtError;
         setCustomerDebt((currentDebts ?? []).reduce((sum, debt) => sum + Number(debt.balance), 0));
       }
-      const { data, error } = await supabase.rpc("process_sale", {
+      const { data, error } = await supabase.rpc("process_sale_with_split", {
         p_customer_id: customerId || null,
         p_items: cart.map((line) => ({
           product_id: line.product.id, unit_id: line.unitId || null, quantity: line.quantity,
         })),
         p_discount: discount,
-        p_received: received,
-        p_payment_method: paymentMethod,
+        p_cash_amount: cashAmount,
+        p_transfer_amount: transferAmount,
         p_pay_old_debt: payOldDebt,
       });
       if (error) throw error;
       const result = data as {
         invoice_no: string; total: number; old_debt_paid: number; old_debt_remaining: number;
-        change_amount: number; status: string;
+        paid_for_sale: number; change_amount: number; status: string;
       };
+      const cashPaid = Math.min(cashAmount, Number(result.paid_for_sale));
+      const transferPaid = Number(result.paid_for_sale) - cashPaid;
       setReceipt({
         invoice: result.invoice_no, time: new Date().toISOString(), customer: customerName, items: cart,
-        subtotal, discount, total: Number(result.total), paymentMethod, received,
+        subtotal, discount, total: Number(result.total),
+        paymentMethod: paymentMethodLabel(cashPaid, transferPaid), received: receivedAmount, cashPaid, transferPaid,
         oldDebtPaid: Number(result.old_debt_paid),
         oldDebtRemaining: Number(result.old_debt_remaining),
         change: Number(result.change_amount), status: result.status,
@@ -514,6 +590,8 @@ export function KasirApp() {
       setCart([]);
       setDiscount(0);
       setReceived(0);
+      setCashReceived(0);
+      setTransferReceived(0);
       setPayOldDebt(false);
       setCustomerId("");
       setCustomerQuery("");
@@ -686,18 +764,19 @@ export function KasirApp() {
     event.preventDefault();
     if (!supabase || !debtDialog) return;
     const form = new FormData(event.currentTarget);
-    const amount = Number(form.get("amount"));
-    const method = String(form.get("method"));
+    const cashAmount = Number(form.get("cash_amount"));
+    const transferAmount = Number(form.get("transfer_amount"));
     try {
-      const { data, error } = await supabase.rpc("collect_debt", {
-        p_customer_id: debtDialog.id, p_amount: amount, p_payment_method: method,
+      const { data, error } = await supabase.rpc("collect_debt_with_split", {
+        p_customer_id: debtDialog.id, p_cash_amount: cashAmount, p_transfer_amount: transferAmount,
       });
       if (error) throw error;
       const payment = data as { paid: number; remaining: number };
       setReceipt({
         invoice: `CICILAN-${Date.now()}`, time: new Date().toISOString(), customer: debtDialog.name,
         items: [], subtotal: Number(payment.paid), discount: 0, total: Number(payment.paid),
-        paymentMethod: method, received: Number(payment.paid), oldDebtPaid: 0, oldDebtRemaining: 0,
+        paymentMethod: paymentMethodLabel(cashAmount, transferAmount), received: Number(payment.paid),
+        cashPaid: cashAmount, transferPaid: transferAmount, oldDebtPaid: 0, oldDebtRemaining: 0,
         change: 0, status: "lunas", isDebtPayment: true, remainingCustomerDebt: Number(payment.remaining),
       });
       setDebtDialog(null);
@@ -714,20 +793,55 @@ export function KasirApp() {
     const quantity = Number(form.get("quantity"));
     const price = Number(form.get("buy_price"));
     const supplierName = String(form.get("supplier") ?? "").trim();
+    const cashAmount = Number(form.get("cash_amount"));
+    const transferAmount = Number(form.get("transfer_amount"));
     if (!product || quantity <= 0 || price < 0) { setNotice("Periksa produk, jumlah, dan harga kulakan."); return; }
+    if (cashAmount < 0 || transferAmount < 0 || cashAmount + transferAmount > quantity * price) {
+      setNotice("Jumlah pembayaran kulakan tidak boleh melebihi total.");
+      return;
+    }
     try {
-      const { error } = await supabase.rpc("process_purchase", {
+      const { error } = await supabase.rpc("process_purchase_with_split", {
         p_product_id: product.id,
         p_quantity: quantity,
         p_buy_price: price,
         p_supplier_name: supplierName || null,
-        p_payment_status: String(form.get("status")),
+        p_cash_amount: cashAmount,
+        p_transfer_amount: transferAmount,
       });
       if (error) throw error;
       setPurchaseDialog(false);
+      setPurchaseTotalPreview(0);
+      setPurchaseRefreshKey((current) => current + 1);
       setNotice("Kulakan tersimpan dan stok bertambah.");
       await loadData();
     } catch (error) { setNotice(messageOf(error)); }
+  }
+
+  async function payPurchase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !purchasePaymentDialog || processingPurchasePayment) return;
+    const form = new FormData(event.currentTarget);
+    const cashAmount = Number(form.get("cash_amount"));
+    const transferAmount = Number(form.get("transfer_amount"));
+    if (cashAmount + transferAmount <= 0) {
+      setNotice("Masukkan jumlah pembayaran supplier.");
+      return;
+    }
+    setProcessingPurchasePayment(true);
+    try {
+      const { error } = await supabase.rpc("record_purchase_payment", {
+        p_purchase_id: purchasePaymentDialog.id,
+        p_cash_amount: cashAmount,
+        p_transfer_amount: transferAmount,
+      });
+      if (error) throw error;
+      setPurchasePaymentDialog(null);
+      setPurchaseRefreshKey((current) => current + 1);
+      setNotice("Pembayaran supplier tersimpan.");
+      await loadData();
+    } catch (error) { setNotice(messageOf(error)); }
+    finally { setProcessingPurchasePayment(false); }
   }
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
@@ -809,9 +923,9 @@ export function KasirApp() {
   const lowStock = products.filter((product) => product.stock_base <= product.minimum_stock);
   const helpSteps: Record<Screen, string[]> = {
     Dashboard: ["Lihat ringkasan penjualan hari ini, jumlah transaksi, piutang, dan stok menipis.", "Grafik merangkum penjualan yang sudah tersimpan pada beberapa hari terakhir.", "Pilih menu di samping untuk membuka kasir, barang, pelanggan, piutang, laporan, atau pengaturan."],
-    Kasir: ["Cari barang atau pilih kategori, lalu tekan Tambah untuk memasukkannya ke keranjang.", "Periksa nama pembeli, daftar barang, diskon, dan total. Tekan Lanjut ke pembayaran jika sudah sesuai.", "Pilih metode pembayaran dan isi uang yang diterima, lalu tekan Proses Pembayaran. Stok akan berkurang otomatis."],
+    Kasir: ["Cari barang atau pilih kategori, lalu tekan Tambah untuk memasukkannya ke keranjang.", "Periksa nama pembeli, daftar barang, diskon, dan total. Tekan Lanjut ke pembayaran jika sudah sesuai.", "Pilih tunai, transfer, atau campuran dan isi nominal tiap metode, lalu tekan Proses Pembayaran."],
     Barang: ["Tekan Tambah Barang untuk mencatat nama, kategori, harga, stok, dan satuan dasar.", "Gunakan tombol stok untuk koreksi dengan alasan. Perubahan tercatat di tab Riwayat Stok.", "Gunakan Kulakan untuk menambah stok dari supplier. Periksa jumlah dan harga sebelum menyimpan."],
-    Piutang: ["Daftar ini hanya menampilkan hutang yang belum lunas, diurutkan dari tanggal tertua.", "Pilih Bayar/Cicil, masukkan nominal, lalu pilih tunai atau transfer.", "Pembayaran dipotong dari hutang terlama terlebih dahulu. Gunakan tombol WhatsApp untuk mengirim pengingat."],
+    Piutang: ["Daftar ini hanya menampilkan hutang yang belum lunas, diurutkan dari tanggal tertua.", "Pilih Bayar/Cicil dan isi jumlah yang dibayar tunai, transfer, atau keduanya.", "Pembayaran dipotong dari hutang terlama terlebih dahulu. Gunakan tombol WhatsApp untuk mengirim pengingat."],
     Pelanggan: ["Tekan Tambah Pelanggan lalu isi nama dan kontak yang tersedia.", "Gunakan kolom cari untuk menemukan pelanggan dari nama atau nomor HP.", "Data pelanggan membantu memilih nama pembeli di kasir dan mencatat hutang."],
     Laporan: ["Atur tanggal awal dan akhir untuk membatasi transaksi yang ditampilkan.", "Periksa jumlah transaksi dan total penjualan di tabel.", "Tekan Unduh PDF untuk menyimpan ringkasan penjualan pada rentang tanggal tersebut."],
     Pengaturan: ["Isi nama, alamat, dan nomor toko yang ingin dicetak pada struk.", "Pilih ukuran kertas dan batas stok yang biasa digunakan.", "Simpan perubahan. Gunakan Ekspor CSV untuk mengunduh salinan data toko."],
@@ -971,20 +1085,39 @@ export function KasirApp() {
             </>}
             {paymentStep && <div className="payment-step-content">
               <div className="payment-options" role="group" aria-label="Metode pembayaran">
-                {["tunai", "transfer"].map((method) => <button key={method} className={`payment-option ${paymentMethod === method ? "chosen" : ""}`} onClick={() => setPaymentMethod(method)}>
-                  <span aria-hidden="true">{method === "tunai" ? "Rp" : "TF"}</span>{method === "tunai" ? "Tunai" : "Transfer"}
+                {(["tunai", "transfer", "campuran"] as const).map((method) => <button key={method} className={`payment-option ${paymentMethod === method ? "chosen" : ""}`} aria-pressed={paymentMethod === method} onClick={() => {
+                  if (method === "campuran") {
+                    setCashReceived(paymentMethod === "tunai" ? received : 0);
+                    setTransferReceived(paymentMethod === "transfer" ? received : 0);
+                  } else if (paymentMethod === "campuran") {
+                    setReceived(method === "tunai" ? cashReceived : transferReceived);
+                  }
+                  setPaymentMethod(method);
+                }}>
+                  <span aria-hidden="true">{method === "tunai" ? "Rp" : method === "transfer" ? "TF" : "+"}</span>
+                  {method === "campuran" ? "Campuran" : method === "tunai" ? "Tunai" : "Transfer"}
                 </button>)}
               </div>
-              {paymentMethod === "transfer" && store?.transfer_info && <p className="transfer-note">{store.transfer_info}</p>}
-              <Field label="Uang diterima">
-                <input type="number" min="0" inputMode="numeric" value={received || ""} onChange={(event) => setReceived(Number(event.target.value))} placeholder={rupiah(total)} />
-              </Field>
-              <div className="quick-cash">
-                {[total, 20000, 50000, 100000].filter((amount, index, list) => amount > 0 && list.indexOf(amount) === index).map((amount) =>
-                  <button key={amount} onClick={() => setReceived(amount)}>{amount === total ? "Uang pas" : `${amount / 1000}rb`}</button>)}
-              </div>
-              <div className="change-row"><span>{received < total ? "Sisa dibayar" : payOldDebt ? "Kembalian" : "Kembalian"}</span><strong>{rupiah(Math.max(0, received - total - (payOldDebt ? customerDebt : 0)))}</strong></div>
-              {received < total && <p className="form-hint">Kurang {rupiah(total - received)}. Pilih pelanggan untuk mencatat hutang.</p>}
+              {(paymentMethod === "transfer" || (paymentMethod === "campuran" && transferReceived > 0)) && store?.transfer_info && <p className="transfer-note">{store.transfer_info}</p>}
+              {paymentMethod === "campuran" ? <div className="payment-split-fields">
+                <Field label="Dibayar tunai">
+                  <input type="number" min="0" inputMode="numeric" value={cashReceived || ""} onChange={(event) => setCashReceived(Number(event.target.value))} placeholder="0" />
+                </Field>
+                <Field label="Dibayar transfer">
+                  <input type="number" min="0" inputMode="numeric" value={transferReceived || ""} onChange={(event) => setTransferReceived(Number(event.target.value))} placeholder="0" />
+                </Field>
+              </div> : <>
+                <Field label="Uang diterima">
+                  <input type="number" min="0" inputMode="numeric" value={received || ""} onChange={(event) => setReceived(Number(event.target.value))} placeholder={rupiah(total)} />
+                </Field>
+                <div className="quick-cash">
+                  {[total, 20000, 50000, 100000].filter((amount, index, list) => amount > 0 && list.indexOf(amount) === index).map((amount) =>
+                    <button key={amount} onClick={() => setReceived(amount)}>{amount === total ? "Uang pas" : `${amount / 1000}rb`}</button>)}
+                </div>
+              </>}
+              {paymentMethod === "campuran" && <div className="change-row"><span>Total diterima</span><strong>{rupiah(paymentReceived)}</strong></div>}
+              <div className="change-row"><span>{paymentReceived < total ? "Sisa dibayar" : "Kembalian"}</span><strong>{rupiah(Math.max(0, paymentReceived - total - (payOldDebt ? customerDebt : 0)))}</strong></div>
+              {paymentReceived < total && <p className="form-hint">Kurang {rupiah(total - paymentReceived)}. Pilih pelanggan untuk mencatat hutang.</p>}
               {payOldDebt && customerDebt > 0 && <p className="form-hint">Pembayaran hutang lama memakai kelebihan uang setelah belanja dibayar.</p>}
               <button className="button button-primary button-full process-button" disabled={!cart.length || processingPayment} onClick={processPayment}>
                 {processingPayment ? "Memproses pembayaran..." : "Proses Pembayaran"}
@@ -995,10 +1128,10 @@ export function KasirApp() {
         </section>}
 
         {screen === "Dashboard" && <DashboardScreen todayTotal={todayTotal} todayCount={todaySales.length} todayProfit={todayProfit} totalDebt={totalDebt} lowStock={lowStock} sales={visibleSales} products={products} saleItems={saleItems} customers={customers} onNavigate={setScreen} />}
-        {screen === "Barang" && <ProductsScreen products={products} categories={categories.filter((name) => name !== "Semua")} onAdd={() => setProductDialog("new")} onEdit={setProductDialog} onRemove={removeProduct} onStock={setStockDialog} onPurchase={() => setPurchaseDialog(true)} supabase={supabase} storeId={store?.id ?? ""} loading={loading} />}
+        {screen === "Barang" && <ProductsScreen products={products} categories={categories.filter((name) => name !== "Semua")} onAdd={() => setProductDialog("new")} onEdit={setProductDialog} onRemove={removeProduct} onStock={setStockDialog} onPurchase={() => { setPurchaseTotalPreview(0); setPurchaseDialog(true); }} onPayPurchase={setPurchasePaymentDialog} refreshPurchases={purchaseRefreshKey} supabase={supabase} storeId={store?.id ?? ""} loading={loading} />}
         {screen === "Piutang" && <DebtScreen debts={debts} allDebts={allDebts} storeName={store?.name ?? "Toko"} supabase={supabase} onPay={setDebtDialog} />}
         {screen === "Pelanggan" && <CustomersScreen customers={customers} debts={debts} sales={sales} onAdd={() => setCustomerDialog("new")} onEdit={setCustomerDialog} onRemove={removeCustomer} />}
-        {screen === "Laporan" && <ReportsScreen sales={sales} saleItems={saleItems} products={products} debts={debts} supabase={supabase} onDownload={exportReport} onReceipt={async (sale) => {
+        {screen === "Laporan" && <ReportsScreen sales={sales} saleItems={saleItems} salePayments={salePayments} products={products} debts={debts} supabase={supabase} onDownload={exportReport} onReceipt={async (sale) => {
           if (!supabase) return;
           const [{ data: items, error: itemError }, { data: customer, error: customerError }] = await Promise.all([
             supabase.from("sale_items").select("*").eq("sale_id", sale.id),
@@ -1016,10 +1149,12 @@ export function KasirApp() {
             factor: Number(item.conversion_factor), price: Number(item.unit_price),
           }));
           const subtotalValue = saleItems.reduce((sum, item) => sum + Number(item.line_total), 0);
+          const amounts = paymentAmounts(salePayments, sale.id);
           setReceipt({
             invoice: sale.invoice_no, time: sale.created_at, customer: customer?.name ?? "Umum", items: lines,
             subtotal: subtotalValue, discount: subtotalValue - Number(sale.total), total: Number(sale.total),
-            paymentMethod: sale.payment_method, received: Number(sale.received_amount ?? 0),
+            paymentMethod: paymentMethodLabel(amounts.tunai, amounts.transfer), received: Number(sale.received_amount ?? 0),
+            cashPaid: amounts.tunai, transferPaid: amounts.transfer,
             oldDebtPaid: Number(sale.old_debt_paid), oldDebtRemaining: Number(sale.old_debt_remaining),
             change: Number(sale.change_amount), status: sale.status,
           });
@@ -1029,7 +1164,7 @@ export function KasirApp() {
           if (error) setNotice(error.message);
           else { setNotice("Transaksi dibatalkan dan stok dikembalikan."); await loadData(); }
         }} />}
-        {screen === "Pengaturan" && store && <SettingsScreen store={store} products={products} customers={customers} sales={sales} onSave={saveSettings} onChangePassword={changePassword} supabase={supabase} onNotice={setNotice} />}
+        {screen === "Pengaturan" && store && <SettingsScreen store={store} products={products} customers={customers} sales={sales} salePayments={salePayments} onSave={saveSettings} onChangePassword={changePassword} supabase={supabase} onNotice={setNotice} />}
       </main>
 
       <nav className="bottom-nav" aria-label="Navigasi bawah">
@@ -1090,22 +1225,48 @@ export function KasirApp() {
       </Dialog>}
 
       {purchaseDialog && <Dialog title="Catat kulakan" onClose={() => setPurchaseDialog(false)}>
-        <form className="form-stack" onSubmit={createPurchase}>
+        <form className="form-stack" onSubmit={createPurchase} onChange={(event) => {
+          const form = new FormData(event.currentTarget);
+          setPurchaseTotalPreview(Math.round(Number(form.get("quantity")) * Number(form.get("buy_price")) * 100) / 100);
+        }}>
           <Field label="Supplier"><input name="supplier" placeholder="Nama supplier (opsional)" /></Field>
           <Field label="Barang"><select name="product" required defaultValue=""><option value="" disabled>Pilih barang</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></Field>
           <Field label="Jumlah satuan dasar"><input name="quantity" type="number" min="0.001" step="0.001" required /></Field>
           <Field label="Harga beli per satuan dasar"><input name="buy_price" type="number" min="0" required /></Field>
-          <Field label="Status pembayaran"><select name="status"><option value="lunas">Lunas</option><option value="belum_lunas">Belum lunas</option></select></Field>
-          <p className="form-hint">Simpan kulakan akan menambah stok barang yang dipilih.</p>
+          <div className="summary-total"><span>Total kulakan</span><strong>{rupiah(purchaseTotalPreview)}</strong></div>
+          <div className="payment-split-fields">
+            <Field label="Dibayar tunai"><input name="cash_amount" type="number" min="0" step="1" defaultValue="0" inputMode="numeric" /></Field>
+            <Field label="Dibayar transfer"><input name="transfer_amount" type="number" min="0" step="1" defaultValue="0" inputMode="numeric" /></Field>
+          </div>
+          <p className="form-hint">Jumlah yang belum dibayar akan tercatat sebagai hutang supplier. Kulakan tetap menambah stok.</p>
           <button className="button button-primary button-full">Simpan kulakan</button>
+        </form>
+      </Dialog>}
+
+      {purchasePaymentDialog && <Dialog title="Bayar tagihan supplier" onClose={() => setPurchasePaymentDialog(null)}>
+        <form className="form-stack" onSubmit={payPurchase}>
+          <div className="debt-total">
+            <span>Sisa tagihan</span>
+            <strong>{rupiah(Number(purchasePaymentDialog.total) - Number(purchasePaymentDialog.paid_amount))}</strong>
+          </div>
+          <div className="payment-split-fields">
+            <Field label="Dibayar tunai"><input name="cash_amount" type="number" min="0" max={Number(purchasePaymentDialog.total) - Number(purchasePaymentDialog.paid_amount)} step="1" defaultValue="0" inputMode="numeric" /></Field>
+            <Field label="Dibayar transfer"><input name="transfer_amount" type="number" min="0" max={Number(purchasePaymentDialog.total) - Number(purchasePaymentDialog.paid_amount)} step="1" defaultValue="0" inputMode="numeric" /></Field>
+          </div>
+          <p className="form-hint">Pembayaran tunai dan transfer dapat digabung. Jumlahnya tidak boleh melebihi sisa tagihan.</p>
+          <button className="button button-primary button-full" disabled={processingPurchasePayment}>
+            {processingPurchasePayment ? "Menyimpan pembayaran..." : "Simpan pembayaran"}
+          </button>
         </form>
       </Dialog>}
 
       {debtDialog && <Dialog title={`Pembayaran ${debtDialog.name}`} onClose={() => setDebtDialog(null)}>
         <form className="form-stack" onSubmit={takeDebtPayment}>
           <p className="debt-total">Total hutang aktif <strong>{rupiah(debts.filter((debt) => debt.customer_id === debtDialog.id).reduce((sum, debt) => sum + Number(debt.balance), 0))}</strong></p>
-          <Field label="Jumlah cicilan"><input name="amount" type="number" min="1" required /></Field>
-          <Field label="Metode pembayaran"><select name="method"><option value="tunai">Tunai</option><option value="transfer">Transfer</option></select></Field>
+          <div className="payment-split-fields">
+            <Field label="Dibayar tunai"><input name="cash_amount" type="number" min="0" step="1" defaultValue="0" inputMode="numeric" /></Field>
+            <Field label="Dibayar transfer"><input name="transfer_amount" type="number" min="0" step="1" defaultValue="0" inputMode="numeric" /></Field>
+          </div>
           <p className="form-hint">Pembayaran akan mengurangi hutang yang paling lama terlebih dahulu.</p>
           <button className="button button-primary button-full">Simpan pembayaran</button>
         </form>
@@ -1133,7 +1294,8 @@ export function KasirApp() {
           <div className="receipt-divider" />
           {receipt.isDebtPayment ? <>
             <div className="receipt-row receipt-strong"><span>Jumlah cicilan</span><span>{rupiah(receipt.total)}</span></div>
-            <div className="receipt-row"><span>Metode bayar</span><span>{receipt.paymentMethod}</span></div>
+            <div className="receipt-row"><span>Tunai</span><span>{rupiah(receipt.cashPaid)}</span></div>
+            <div className="receipt-row"><span>Transfer</span><span>{rupiah(receipt.transferPaid)}</span></div>
             <div className="receipt-row"><span>Sisa seluruh hutang</span><span>{rupiah(receipt.remainingCustomerDebt)}</span></div>
             <div className="receipt-status paid">BUKTI CICILAN</div>
           </> : <>
@@ -1141,8 +1303,10 @@ export function KasirApp() {
             {receipt.discount > 0 && <div className="receipt-row"><span>Diskon</span><span>-{rupiah(receipt.discount)}</span></div>}
             <div className="receipt-row receipt-strong"><span>Total</span><span>{rupiah(receipt.total)}</span></div>
             <div className="receipt-row"><span>Uang diterima</span><span>{rupiah(receipt.received)}</span></div>
-            <div className="receipt-row"><span>Untuk belanja ({receipt.paymentMethod})</span><span>{rupiah(Math.min(receipt.total, receipt.received))}</span></div>
-            {receipt.paymentMethod === "transfer" && store?.transfer_info && <div className="receipt-row"><span>Rekening</span><span>{store.transfer_info}</span></div>}
+            <div className="receipt-row"><span>Metode pembayaran</span><span>{receipt.paymentMethod}</span></div>
+            {receipt.cashPaid > 0 && <div className="receipt-row"><span>Untuk belanja, tunai</span><span>{rupiah(receipt.cashPaid)}</span></div>}
+            {receipt.transferPaid > 0 && <div className="receipt-row"><span>Untuk belanja, transfer</span><span>{rupiah(receipt.transferPaid)}</span></div>}
+            {receipt.transferPaid > 0 && store?.transfer_info && <div className="receipt-row"><span>Rekening</span><span>{store.transfer_info}</span></div>}
             {receipt.oldDebtPaid > 0 && <><div className="receipt-row"><span>Bayar hutang lama</span><span>{rupiah(receipt.oldDebtPaid)}</span></div><div className="receipt-row"><span>Sisa hutang lama</span><span>{rupiah(receipt.oldDebtRemaining)}</span></div></>}
             {receipt.status === "hutang" && <div className="receipt-row"><span>Sisa hutang transaksi ini</span><span>{rupiah(receipt.total - Math.min(receipt.total, receipt.received))}</span></div>}
             <div className="receipt-row"><span>Kembalian</span><span>{rupiah(receipt.change)}</span></div>
@@ -1249,9 +1413,10 @@ function StatusTag({ status }: { status: string }) {
   return <span className={`status-tag ${status}`}>{label}</span>;
 }
 
-function ProductsScreen({ products, categories, onAdd, onEdit, onRemove, onStock, onPurchase, supabase, storeId, loading }: {
+function ProductsScreen({ products, categories, onAdd, onEdit, onRemove, onStock, onPurchase, onPayPurchase, refreshPurchases, supabase, storeId, loading }: {
   products: Product[]; categories: string[]; onAdd: () => void; onEdit: (product: Product) => void;
   onRemove: (product: Product) => void; onStock: (product: Product) => void; onPurchase: () => void;
+  onPayPurchase: (purchase: PurchaseRow) => void; refreshPurchases: number;
   supabase: ReturnType<typeof getSupabase>; storeId: string; loading: boolean;
 }) {
   const [tab, setTab] = useState<"produk" | "kulakan" | "stok">("produk");
@@ -1263,9 +1428,9 @@ function ProductsScreen({ products, categories, onAdd, onEdit, onRemove, onStock
     if (!supabase) return;
     if (tab === "stok") supabase.from("stock_movements").select("*,products(name,base_unit)").order("created_at", { ascending: false }).limit(100)
       .then(({ data, error: resultError }) => { if (resultError) setError(resultError.message); else setHistory((data ?? []) as StockMovement[]); });
-    if (tab === "kulakan") supabase.from("purchases").select("*,purchase_items(product_name,quantity,buy_price)").order("purchased_at", { ascending: false }).limit(100)
+    if (tab === "kulakan")     supabase.from("purchases").select("*,purchase_payments(amount,payment_method),purchase_items(product_name,quantity,buy_price)").order("purchased_at", { ascending: false }).limit(100)
       .then(({ data, error: resultError }) => { if (resultError) setError(resultError.message); else setPurchases((data ?? []) as PurchaseRow[]); });
-  }, [supabase, tab]);
+  }, [refreshPurchases, supabase, tab]);
   const list = products.filter((product) => product.name.toLocaleLowerCase("id").includes(query.toLocaleLowerCase("id")));
   return <section className="page-content">
     <div className="page-toolbar"><div><h2>Barang & stok</h2><p>Kelola barang, periksa jumlah stok, dan catat kulakan.</p></div><div className="toolbar-actions"><button className="button button-quiet" onClick={onPurchase}>Catat kulakan</button><button className="button button-primary" onClick={onAdd}>Tambah barang</button></div></div>
@@ -1283,8 +1448,11 @@ function ProductsScreen({ products, categories, onAdd, onEdit, onRemove, onStock
         </tbody></table></div>}
     </>}
     {tab === "kulakan" && (purchases.length === 0 ? <EmptyState title="Belum ada catatan kulakan" description="Catat pembelian barang dari supplier untuk menambah stok." action={<button className="button button-primary" onClick={onPurchase}>Catat kulakan</button>} /> :
-      <div className="surface table-surface table-scroll"><table><thead><tr><th>Tanggal</th><th>Supplier</th><th>Barang</th><th>Status</th><th>Total</th></tr></thead><tbody>
-        {purchases.map((purchase) => <tr key={purchase.id}><td>{tanggal(purchase.purchased_at)}</td><td>{purchase.supplier_name || "Tidak disebutkan"}</td><td>{purchase.purchase_items?.map((item) => `${item.product_name} (${item.quantity})`).join(", ")}</td><td>{purchase.status === "lunas" ? "Lunas" : "Belum lunas"}</td><td>{rupiah(purchase.total)}</td></tr>)}
+      <div className="surface table-surface table-scroll"><table><thead><tr><th>Tanggal</th><th>Supplier</th><th>Barang</th><th>Status</th><th>Metode</th><th>Dibayar</th><th>Sisa</th><th>Aksi</th></tr></thead><tbody>
+        {purchases.map((purchase) => {
+          const remaining = Number(purchase.total) - Number(purchase.paid_amount);
+          return <tr key={purchase.id}><td>{tanggal(purchase.purchased_at)}</td><td>{purchase.supplier_name || "Tidak disebutkan"}</td><td>{purchase.purchase_items?.map((item) => `${item.product_name} (${item.quantity})`).join(", ")}</td><td>{purchase.status === "lunas" ? "Lunas" : "Belum lunas"}</td><td>{purchasePaymentLabel(purchase)}</td><td>{rupiah(purchase.paid_amount)}</td><td>{rupiah(remaining)}</td><td>{remaining > 0 ? <button className="table-action" onClick={() => onPayPurchase(purchase)}>Bayar sisa</button> : "Selesai"}</td></tr>;
+        })}
       </tbody></table></div>)}
     {tab === "stok" && (history.length === 0 ? <EmptyState title="Riwayat stok masih kosong" description="Perubahan dari penjualan, kulakan, dan penyesuaian akan tercatat di sini." /> :
       <div className="surface table-surface table-scroll"><table><thead><tr><th>Tanggal</th><th>Barang</th><th>Perubahan</th><th>Jenis</th><th>Keterangan</th></tr></thead><tbody>
@@ -1355,7 +1523,7 @@ function DebtScreen({ debts, allDebts, storeName, supabase, onPay }: {
         : detailError ? <p className="form-error" role="alert">{detailError}</p>
           : payments.length === 0 ? <p className="inline-empty">Belum ada cicilan untuk hutang yang masih aktif.</p>
             : <div className="table-scroll"><table><thead><tr><th>Tanggal</th><th>Metode</th><th>Jumlah</th></tr></thead><tbody>
-              {payments.map((payment) => <tr key={payment.id}><td>{tanggal(payment.created_at)}</td><td>{payment.payment_method}</td><td>{rupiah(payment.amount)}</td></tr>)}
+              {payments.map((payment) => <tr key={payment.id}><td>{tanggal(payment.created_at)}</td><td>{payment.payment_method === "tunai" ? "Tunai" : "Transfer"}</td><td>{rupiah(payment.amount)}</td></tr>)}
             </tbody></table></div>}
     </Dialog>}
   </section>;
@@ -1390,8 +1558,8 @@ function CustomersScreen({ customers, debts, sales, onAdd, onEdit, onRemove }: {
   </section>;
 }
 
-function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload, onReceipt, onCancel }: {
-  sales: Sale[]; saleItems: SaleItemRecord[]; products: Product[];
+function ReportsScreen({ sales, saleItems, salePayments, products, debts, supabase, onDownload, onReceipt, onCancel }: {
+  sales: Sale[]; saleItems: SaleItemRecord[]; salePayments: SalePayment[]; products: Product[];
   debts: DebtRow[]; supabase: ReturnType<typeof getSupabase>;
   onDownload: (report: ReportPayload) => void;
   onReceipt: (sale: Sale) => void; onCancel: (sale: Sale) => void;
@@ -1399,6 +1567,7 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
   const [start, setStart] = useState(localDate());
   const [end, setEnd] = useState(localDate());
   const [status, setStatus] = useState("semua");
+  const [method, setMethod] = useState("semua");
   const [kind, setKind] = useState<"penjualan" | "laba" | "stok" | "kulakan" | "piutang" | "terlaris">("penjualan");
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [loadingPurchases, setLoadingPurchases] = useState(false);
@@ -1407,7 +1576,7 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
     if (!supabase || kind !== "kulakan") return;
     const timer = window.setTimeout(() => {
       setLoadingPurchases(true);
-      void supabase.from("purchases").select("id,purchased_at,supplier_name,status,total,purchase_items(product_name,quantity,buy_price)")
+      void supabase.from("purchases").select("id,purchased_at,supplier_name,status,total,paid_amount,purchase_payments(amount,payment_method),purchase_items(product_name,quantity,buy_price)")
         .order("purchased_at", { ascending: false }).then(({ data, error: resultError }) => {
           if (resultError) setError(resultError.message);
           else setPurchases((data ?? []) as PurchaseRow[]);
@@ -1416,14 +1585,23 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
     }, 0);
     return () => window.clearTimeout(timer);
   }, [kind, supabase]);
+  const paymentTotals = paymentAmountsBySale(salePayments);
+  const amountsForSale = (saleId: string) => paymentTotals.get(saleId) ?? { tunai: 0, transfer: 0 };
   const filteredSales = sales.filter((sale) => {
     const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date(sale.created_at));
-    return date >= start && date <= end && (status === "semua" || sale.status === status);
+    const amounts = amountsForSale(sale.id);
+    const saleMethod = amounts.tunai > 0 && amounts.transfer > 0 ? "campuran"
+      : amounts.transfer > 0 ? "transfer" : amounts.tunai > 0 ? "tunai" : "belum_dibayar";
+    return date >= start && date <= end
+      && (status === "semua" || sale.status === status)
+      && (method === "semua" || saleMethod === method);
   });
   const activeSales = filteredSales.filter((sale) => sale.status !== "dibatalkan");
   const saleIds = new Set(activeSales.map((sale) => sale.id));
   const periodItems = saleItems.filter((item) => saleIds.has(item.sale_id));
   const totalSales = activeSales.reduce((sum, sale) => sum + Number(sale.total), 0);
+  const totalCashPayments = activeSales.reduce((sum, sale) => sum + amountsForSale(sale.id).tunai, 0);
+  const totalTransferPayments = activeSales.reduce((sum, sale) => sum + amountsForSale(sale.id).transfer, 0);
   const costTotal = periodItems.reduce((sum, item) =>
     sum + Number(item.quantity) * Number(item.conversion_factor) * Number(item.cost_price), 0);
   const profitBySale = new Map<string, number>();
@@ -1447,11 +1625,15 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
     });
   }
   let title = "Penjualan";
-  let columns = ["No. transaksi", "Tanggal", "Status", "Metode", "Total"];
-  let rows = filteredSales.map((sale) => [
-    sale.invoice_no, tanggal(sale.created_at), sale.status, sale.payment_method, rupiah(sale.total),
-  ]);
-  let summary = `Total penjualan: ${rupiah(totalSales)} dari ${activeSales.length} transaksi`;
+  let columns = ["No. transaksi", "Tanggal", "Status", "Tunai", "Transfer", "Total"];
+  let rows = filteredSales.map((sale) => {
+    const amounts = amountsForSale(sale.id);
+    return [
+      sale.invoice_no, tanggal(sale.created_at), sale.status, rupiah(amounts.tunai),
+      rupiah(amounts.transfer), rupiah(sale.total),
+    ];
+  });
+  let summary = `Total penjualan: ${rupiah(totalSales)} dari ${activeSales.length} transaksi · Tunai ${rupiah(totalCashPayments)} · Transfer ${rupiah(totalTransferPayments)}`;
   let isLoading = false;
   let emptyTitle = "Belum ada transaksi pada rentang ini";
   let emptyDescription = "Coba pilih tanggal lain. Transaksi baru akan muncul setelah pembayaran diproses.";
@@ -1478,13 +1660,20 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
     emptyDescription = "Tambahkan barang agar ringkasan stok tersedia.";
   } else if (kind === "kulakan") {
     title = "Kulakan";
-    columns = ["Tanggal", "Supplier", "Barang", "Status", "Total"];
-    rows = purchaseRows.map((purchase) => [
-      tanggal(purchase.purchased_at), purchase.supplier_name ?? "Tidak disebutkan",
-      purchase.purchase_items.map((item) => `${item.product_name} (${item.quantity})`).join(", "),
-      purchase.status === "lunas" ? "Lunas" : "Belum lunas", rupiah(purchase.total),
-    ]);
-    summary = `Total kulakan: ${rupiah(purchaseRows.reduce((sum, purchase) => sum + Number(purchase.total), 0))}`;
+    columns = ["Tanggal", "Supplier", "Barang", "Status", "Tunai", "Transfer", "Dibayar", "Sisa"];
+    rows = purchaseRows.map((purchase) => {
+      const amounts = purchasePaymentAmounts(purchase);
+      const hasMethodDetails = (purchase.purchase_payments ?? []).length > 0;
+      return [
+        tanggal(purchase.purchased_at), purchase.supplier_name ?? "Tidak disebutkan",
+        purchase.purchase_items.map((item) => `${item.product_name} (${item.quantity})`).join(", "),
+        purchase.status === "lunas" ? "Lunas" : "Belum lunas",
+        hasMethodDetails ? rupiah(amounts.tunai) : "Rincian lama tidak tersedia",
+        hasMethodDetails ? rupiah(amounts.transfer) : "Rincian lama tidak tersedia",
+        rupiah(purchase.paid_amount), rupiah(Number(purchase.total) - Number(purchase.paid_amount)),
+      ];
+    });
+    summary = `Total kulakan: ${rupiah(purchaseRows.reduce((sum, purchase) => sum + Number(purchase.total), 0))} · Dibayar ${rupiah(purchaseRows.reduce((sum, purchase) => sum + Number(purchase.paid_amount), 0))}`;
     isLoading = loadingPurchases;
     emptyTitle = "Belum ada catatan kulakan";
     emptyDescription = "Kulakan yang disimpan akan muncul pada rentang tanggal ini.";
@@ -1518,6 +1707,7 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
       <Field label="Dari tanggal"><input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></Field>
       <Field label="Sampai tanggal"><input type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></Field>
       {kind === "penjualan" ? <Field label="Status"><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="semua">Semua transaksi</option><option value="lunas">Lunas</option><option value="hutang">Hutang</option><option value="dibatalkan">Dibatalkan</option></select></Field> : <div />}
+      {kind === "penjualan" && <Field label="Metode pembayaran"><select value={method} onChange={(event) => setMethod(event.target.value)}><option value="semua">Semua metode</option><option value="tunai">Tunai</option><option value="transfer">Transfer</option><option value="campuran">Campuran</option><option value="belum_dibayar">Belum dibayar</option></select></Field>}
     </div>}
     {error && <p className="form-error" role="alert">{error}</p>}
     {isLoading ? <p className="inline-empty" role="status">Memuat laporan kulakan...</p> : rows.length === 0
@@ -1525,35 +1715,48 @@ function ReportsScreen({ sales, saleItems, products, debts, supabase, onDownload
       : <>
         <div className="report-total surface"><span>{rows.length} baris</span><strong>{summary}</strong><small>Periode: {period}</small></div>
         <div className="surface table-surface table-scroll"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}{kind === "penjualan" && <th>Aksi</th>}</tr></thead><tbody>
-          {kind === "penjualan" ? filteredSales.map((sale) => <tr key={sale.id}><td>{sale.invoice_no}</td><td>{tanggal(sale.created_at)}</td><td><StatusTag status={sale.status} /></td><td>{sale.payment_method}</td><td>{rupiah(sale.total)}</td><td><div className="row-actions"><button onClick={() => onReceipt(sale)}>Lihat struk</button><button className="table-action" disabled={sale.status === "dibatalkan"} onClick={() => onCancel(sale)}>{sale.status === "dibatalkan" ? "Dibatalkan" : "Batalkan"}</button></div></td></tr>)
+          {kind === "penjualan" ? filteredSales.map((sale) => {
+            const amounts = amountsForSale(sale.id);
+            return <tr key={sale.id}><td>{sale.invoice_no}</td><td>{tanggal(sale.created_at)}</td><td><StatusTag status={sale.status} /></td><td>{rupiah(amounts.tunai)}</td><td>{rupiah(amounts.transfer)}</td><td>{rupiah(sale.total)}</td><td><div className="row-actions"><button onClick={() => onReceipt(sale)}>Lihat struk</button><button className="table-action" disabled={sale.status === "dibatalkan"} onClick={() => onCancel(sale)}>{sale.status === "dibatalkan" ? "Dibatalkan" : "Batalkan"}</button></div></td></tr>;
+          })
             : rows.map((row, index) => <tr key={`${kind}-${index}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{cell}</td>)}</tr>)}
         </tbody></table></div>
       </>}
   </section>;
 }
 
-function SettingsScreen({ store, products, customers, sales, onSave, onChangePassword, supabase, onNotice }: {
-  store: Store; products: Product[]; customers: Customer[]; sales: Sale[];
+function SettingsScreen({ store, products, customers, sales, salePayments, onSave, onChangePassword, supabase, onNotice }: {
+  store: Store; products: Product[]; customers: Customer[]; sales: Sale[]; salePayments: SalePayment[];
   onSave: (event: FormEvent<HTMLFormElement>) => void; onChangePassword: (event: FormEvent<HTMLFormElement>) => void;
   supabase: ReturnType<typeof getSupabase>; onNotice: (message: string) => void;
 }) {
+  const salePaymentsById = paymentAmountsBySale(salePayments);
   async function exportData() {
     if (!supabase) return;
     try {
       const [purchaseResult, debtResult, movementResult] = await Promise.all([
-        supabase.from("purchases").select("*"),
+        supabase.from("purchases").select("*,purchase_payments(amount,payment_method)"),
         supabase.from("debts").select("*"),
         supabase.from("stock_movements").select("*"),
       ]);
       for (const result of [purchaseResult, debtResult, movementResult]) if (result.error) throw result.error;
       csvDownload("cadangan-data-toko.csv", [
-        ["Jenis data", "Tanggal", "Nama / nomor", "Status / satuan", "Jumlah"],
-        ...products.map((item) => ["Barang", "", item.name, item.base_unit, item.stock_base]),
-        ...customers.map((item) => ["Pelanggan", "", item.name, item.phone ?? "", ""]),
-        ...sales.map((item) => ["Penjualan", tanggal(item.created_at), item.invoice_no, item.status, item.total]),
-        ...((purchaseResult.data ?? []) as ExportRow[]).map((item) => ["Kulakan", tanggal(item.purchased_at), item.supplier_name ?? "", item.status ?? "", item.total ?? 0]),
-        ...((debtResult.data ?? []) as ExportRow[]).map((item) => ["Piutang", tanggal(item.created_at), item.customer_id ?? "", item.status ?? "", item.balance ?? 0]),
-        ...((movementResult.data ?? []) as ExportRow[]).map((item) => ["Stok", tanggal(item.created_at), item.product_id ?? "", item.movement_type ?? "", item.quantity_base ?? 0]),
+        ["Jenis data", "Tanggal", "Nama / nomor", "Status / satuan", "Jumlah", "Tunai", "Transfer"],
+        ...products.map((item) => ["Barang", "", item.name, item.base_unit, item.stock_base, "", ""]),
+        ...customers.map((item) => ["Pelanggan", "", item.name, item.phone ?? "", "", "", ""]),
+        ...sales.map((item) => {
+          const amounts = salePaymentsById.get(item.id) ?? { tunai: 0, transfer: 0 };
+          return ["Penjualan", tanggal(item.created_at), item.invoice_no, item.status, item.total, amounts.tunai, amounts.transfer];
+        }),
+        ...((purchaseResult.data ?? []) as ExportRow[]).map((item) => {
+          const payments = item.purchase_payments ?? [];
+          const cashPaid = payments.filter((payment) => payment.payment_method === "tunai").reduce((sum, payment) => sum + Number(payment.amount), 0);
+          const transferPaid = payments.filter((payment) => payment.payment_method === "transfer").reduce((sum, payment) => sum + Number(payment.amount), 0);
+          const methodDetails = payments.length > 0 || !Number(item.paid_amount) ? [cashPaid, transferPaid] : ["Rincian lama tidak tersedia", "Rincian lama tidak tersedia"];
+          return ["Kulakan", tanggal(item.purchased_at), item.supplier_name ?? "", item.status ?? "", item.paid_amount ?? 0, ...methodDetails];
+        }),
+        ...((debtResult.data ?? []) as ExportRow[]).map((item) => ["Piutang", tanggal(item.created_at), item.customer_id ?? "", item.status ?? "", item.balance ?? 0, "", ""]),
+        ...((movementResult.data ?? []) as ExportRow[]).map((item) => ["Stok", tanggal(item.created_at), item.product_id ?? "", item.movement_type ?? "", item.quantity_base ?? 0, "", ""]),
       ]);
       onNotice("File CSV berhasil diunduh. Simpan file tersebut di tempat yang aman.");
     } catch (error) { onNotice(`Data belum dapat diekspor: ${messageOf(error)}`); }

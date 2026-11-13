@@ -97,7 +97,7 @@ create table public.sales (
   change_amount numeric(14,2) not null default 0,
   old_debt_paid numeric(14,2) not null default 0,
   old_debt_remaining numeric(14,2) not null default 0,
-  payment_method text not null check (payment_method in ('tunai', 'transfer')),
+  payment_method text not null check (payment_method in ('tunai', 'transfer', 'campuran')),
   status text not null default 'lunas' check (status in ('lunas', 'hutang', 'dibatalkan')),
   created_at timestamptz not null default now(),
   canceled_at timestamptz,
@@ -156,9 +156,19 @@ create table public.purchases (
   supplier_id uuid references public.suppliers(id) on delete set null,
   supplier_name text,
   total numeric(14,2) not null default 0 check (total >= 0),
+  paid_amount numeric(14,2) not null default 0 check (paid_amount >= 0 and paid_amount <= total),
   status text not null default 'lunas' check (status in ('lunas', 'belum_lunas')),
   purchased_at timestamptz not null default now(),
   notes text
+);
+
+create table public.purchase_payments (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  purchase_id uuid not null references public.purchases(id) on delete cascade,
+  amount numeric(14,2) not null check (amount > 0),
+  payment_method text not null check (payment_method in ('tunai', 'transfer')),
+  created_at timestamptz not null default now()
 );
 
 create table public.purchase_items (
@@ -289,10 +299,10 @@ begin
   end if;
   v_total := p_quantity * p_buy_price;
   insert into public.purchases (
-    id, store_id, supplier_id, supplier_name, total, status
+    id, store_id, supplier_id, supplier_name, total, paid_amount, status
   ) values (
     v_purchase_id, v_store, v_supplier_id, nullif(trim(p_supplier_name), ''),
-    v_total, p_payment_status
+    v_total, case when p_payment_status = 'lunas' then v_total else 0 end, p_payment_status
   );
   insert into public.purchase_items (
     store_id, purchase_id, product_id, product_name, unit_name, quantity,
@@ -312,6 +322,105 @@ begin
     v_purchase_id
   );
   return v_purchase_id;
+end;
+$$;
+
+create or replace function public.process_purchase_with_split(
+  p_product_id uuid,
+  p_quantity numeric,
+  p_buy_price numeric,
+  p_supplier_name text,
+  p_cash_amount numeric,
+  p_transfer_amount numeric
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_total numeric;
+  v_paid numeric;
+  v_status text;
+  v_purchase_id uuid;
+  v_store uuid;
+begin
+  if p_quantity is null or p_quantity <= 0 or p_buy_price is null or p_buy_price < 0 then
+    raise exception 'Periksa jumlah dan harga kulakan.';
+  end if;
+  if p_cash_amount is null or p_cash_amount < 0
+    or p_transfer_amount is null or p_transfer_amount < 0 then
+    raise exception 'Jumlah tunai dan transfer tidak boleh negatif.';
+  end if;
+  v_total := round(p_quantity * p_buy_price, 2);
+  v_paid := p_cash_amount + p_transfer_amount;
+  if v_paid > v_total then raise exception 'Pembayaran kulakan melebihi total.'; end if;
+  v_status := case when v_paid = v_total then 'lunas' else 'belum_lunas' end;
+
+  v_purchase_id := public.process_purchase(
+    p_product_id, p_quantity, p_buy_price, p_supplier_name, v_status
+  );
+  select id into v_store from public.stores where user_id = auth.uid();
+  update public.purchases set paid_amount = v_paid where id = v_purchase_id and store_id = v_store;
+  if p_cash_amount > 0 then
+    insert into public.purchase_payments (store_id, purchase_id, amount, payment_method)
+    values (v_store, v_purchase_id, p_cash_amount, 'tunai');
+  end if;
+  if p_transfer_amount > 0 then
+    insert into public.purchase_payments (store_id, purchase_id, amount, payment_method)
+    values (v_store, v_purchase_id, p_transfer_amount, 'transfer');
+  end if;
+  return v_purchase_id;
+end;
+$$;
+
+create or replace function public.record_purchase_payment(
+  p_purchase_id uuid,
+  p_cash_amount numeric,
+  p_transfer_amount numeric
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_store uuid;
+  v_purchase public.purchases%rowtype;
+  v_payment_amount numeric;
+  v_paid_amount numeric;
+begin
+  if p_cash_amount is null or p_cash_amount < 0
+    or p_transfer_amount is null or p_transfer_amount < 0
+    or p_cash_amount + p_transfer_amount <= 0 then
+    raise exception 'Masukkan jumlah tunai atau transfer lebih dari nol.';
+  end if;
+  select id into v_store from public.stores where user_id = auth.uid();
+  select * into v_purchase from public.purchases
+    where id = p_purchase_id and store_id = v_store for update;
+  if not found then raise exception 'Catatan kulakan tidak ditemukan.'; end if;
+
+  v_payment_amount := p_cash_amount + p_transfer_amount;
+  if v_payment_amount > v_purchase.total - v_purchase.paid_amount then
+    raise exception 'Pembayaran melebihi sisa hutang supplier.';
+  end if;
+  v_paid_amount := v_purchase.paid_amount + v_payment_amount;
+  if p_cash_amount > 0 then
+    insert into public.purchase_payments (store_id, purchase_id, amount, payment_method)
+    values (v_store, p_purchase_id, p_cash_amount, 'tunai');
+  end if;
+  if p_transfer_amount > 0 then
+    insert into public.purchase_payments (store_id, purchase_id, amount, payment_method)
+    values (v_store, p_purchase_id, p_transfer_amount, 'transfer');
+  end if;
+  update public.purchases set
+    paid_amount = v_paid_amount,
+    status = case when v_paid_amount = total then 'lunas' else 'belum_lunas' end
+  where id = p_purchase_id and store_id = v_store;
+  return jsonb_build_object(
+    'paid_amount', v_paid_amount, 'remaining_amount', v_purchase.total - v_paid_amount,
+    'status', case when v_paid_amount = v_purchase.total then 'lunas' else 'belum_lunas' end
+  );
 end;
 $$;
 
@@ -481,6 +590,108 @@ begin
 end;
 $$;
 
+create or replace function public.process_sale_with_split(
+  p_customer_id uuid,
+  p_items jsonb,
+  p_discount numeric,
+  p_cash_amount numeric,
+  p_transfer_amount numeric,
+  p_pay_old_debt boolean
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_store uuid;
+  v_result jsonb;
+  v_sale_id uuid;
+  v_paid_for_sale numeric;
+  v_old_debt_paid numeric;
+  v_cash numeric := coalesce(p_cash_amount, 0);
+  v_transfer numeric := coalesce(p_transfer_amount, 0);
+  v_cash_sale numeric;
+  v_transfer_sale numeric;
+  v_cash_old_remaining numeric;
+  v_transfer_old_remaining numeric;
+  v_cash_part numeric;
+  v_transfer_part numeric;
+  v_payment record;
+  v_debt_payment_id uuid;
+begin
+  if p_cash_amount is null or p_cash_amount < 0
+    or p_transfer_amount is null or p_transfer_amount < 0 then
+    raise exception 'Jumlah tunai dan transfer tidak boleh negatif.';
+  end if;
+  select id into v_store from public.stores where user_id = auth.uid();
+  if v_store is null then raise exception 'Toko belum tersedia untuk akun ini.'; end if;
+
+  v_result := public.process_sale(
+    p_customer_id, p_items, p_discount, v_cash + v_transfer, 'tunai', p_pay_old_debt
+  );
+  v_sale_id := (v_result->>'sale_id')::uuid;
+  v_paid_for_sale := (v_result->>'paid_for_sale')::numeric;
+  v_old_debt_paid := (v_result->>'old_debt_paid')::numeric;
+  v_cash_sale := least(v_cash, v_paid_for_sale);
+  v_transfer_sale := v_paid_for_sale - v_cash_sale;
+  v_cash_old_remaining := v_cash - v_cash_sale;
+  v_transfer_old_remaining := v_transfer - v_transfer_sale;
+
+  delete from public.payments
+    where sale_id = v_sale_id and payment_kind = 'penjualan';
+  if v_cash_sale > 0 then
+    insert into public.payments (store_id, sale_id, payment_kind, amount, payment_method)
+    values (v_store, v_sale_id, 'penjualan', v_cash_sale, 'tunai');
+  end if;
+  if v_transfer_sale > 0 then
+    insert into public.payments (store_id, sale_id, payment_kind, amount, payment_method)
+    values (v_store, v_sale_id, 'penjualan', v_transfer_sale, 'transfer');
+  end if;
+
+  for v_payment in
+    select p.id as payment_id, dp.id as debt_payment_id, dp.debt_id, dp.amount
+    from public.payments p
+    join public.debt_payments dp on dp.id = p.debt_payment_id
+    where p.sale_id = v_sale_id and p.payment_kind = 'bayar_hutang_lama'
+    order by dp.created_at, dp.id
+  loop
+    delete from public.payments where id = v_payment.payment_id;
+    delete from public.debt_payments where id = v_payment.debt_payment_id;
+    v_cash_part := least(v_cash_old_remaining, v_payment.amount);
+    v_transfer_part := v_payment.amount - v_cash_part;
+    if v_transfer_part > v_transfer_old_remaining then
+      raise exception 'Rincian pembayaran tidak sesuai dengan jumlah yang diterima.';
+    end if;
+    if v_cash_part > 0 then
+      insert into public.debt_payments (store_id, debt_id, amount, payment_method)
+      values (v_store, v_payment.debt_id, v_cash_part, 'tunai')
+      returning id into v_debt_payment_id;
+      insert into public.payments (
+        store_id, sale_id, debt_payment_id, payment_kind, amount, payment_method
+      ) values (v_store, v_sale_id, v_debt_payment_id, 'bayar_hutang_lama', v_cash_part, 'tunai');
+    end if;
+    if v_transfer_part > 0 then
+      insert into public.debt_payments (store_id, debt_id, amount, payment_method)
+      values (v_store, v_payment.debt_id, v_transfer_part, 'transfer')
+      returning id into v_debt_payment_id;
+      insert into public.payments (
+        store_id, sale_id, debt_payment_id, payment_kind, amount, payment_method
+      ) values (v_store, v_sale_id, v_debt_payment_id, 'bayar_hutang_lama', v_transfer_part, 'transfer');
+    end if;
+    v_cash_old_remaining := v_cash_old_remaining - v_cash_part;
+    v_transfer_old_remaining := v_transfer_old_remaining - v_transfer_part;
+  end loop;
+
+  update public.sales set payment_method = case
+    when v_cash_sale > 0 and v_transfer_sale > 0 then 'campuran'
+    when v_transfer_sale > 0 then 'transfer'
+    else 'tunai'
+  end where id = v_sale_id and store_id = v_store;
+  return v_result;
+end;
+$$;
+
 create or replace function public.collect_debt(
   p_customer_id uuid,
   p_amount numeric,
@@ -541,6 +752,41 @@ begin
 end;
 $$;
 
+create or replace function public.collect_debt_with_split(
+  p_customer_id uuid,
+  p_cash_amount numeric,
+  p_transfer_amount numeric
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_cash_result jsonb;
+  v_transfer_result jsonb;
+  v_paid numeric := 0;
+  v_remaining numeric;
+begin
+  if p_cash_amount is null or p_cash_amount < 0
+    or p_transfer_amount is null or p_transfer_amount < 0
+    or p_cash_amount + p_transfer_amount <= 0 then
+    raise exception 'Masukkan jumlah tunai atau transfer lebih dari nol.';
+  end if;
+  if p_cash_amount > 0 then
+    v_cash_result := public.collect_debt(p_customer_id, p_cash_amount, 'tunai');
+    v_paid := v_paid + (v_cash_result->>'paid')::numeric;
+    v_remaining := (v_cash_result->>'remaining')::numeric;
+  end if;
+  if p_transfer_amount > 0 then
+    v_transfer_result := public.collect_debt(p_customer_id, p_transfer_amount, 'transfer');
+    v_paid := v_paid + (v_transfer_result->>'paid')::numeric;
+    v_remaining := (v_transfer_result->>'remaining')::numeric;
+  end if;
+  return jsonb_build_object('paid', v_paid, 'remaining', v_remaining);
+end;
+$$;
+
 create or replace function public.cancel_sale(p_sale_id uuid)
 returns void
 language plpgsql
@@ -551,6 +797,7 @@ declare
   v_store uuid;
   v_sale public.sales%rowtype;
   v_line record;
+  v_payment record;
 begin
   select id into v_store from public.stores where user_id = auth.uid();
   select * into v_sale from public.sales
@@ -579,10 +826,13 @@ begin
     end if;
   end loop;
   update public.debts set balance = 0, status = 'dibatalkan' where sale_id = p_sale_id;
-  if least(v_sale.received_amount, v_sale.total) > 0 then
+  for v_payment in
+    select amount, payment_method from public.payments
+    where sale_id = p_sale_id and payment_kind = 'penjualan'
+  loop
     insert into public.payments (store_id, sale_id, payment_kind, amount, payment_method)
-    values (v_store, p_sale_id, 'pengembalian', least(v_sale.received_amount, v_sale.total), v_sale.payment_method);
-  end if;
+    values (v_store, p_sale_id, 'pengembalian', v_payment.amount, v_payment.payment_method);
+  end loop;
   update public.sales set status = 'dibatalkan', canceled_at = now() where id = p_sale_id;
 end;
 $$;
@@ -641,7 +891,7 @@ begin
   foreach table_name in array array[
     'categories', 'products', 'product_units', 'customers', 'suppliers',
     'sales', 'sale_items', 'debts', 'debt_payments', 'payments',
-    'purchases', 'purchase_items', 'stock_movements'
+    'purchases', 'purchase_payments', 'purchase_items', 'stock_movements'
   ]
   loop
     execute format('alter table public.%I enable row level security', table_name);
@@ -658,12 +908,17 @@ grant select, insert, update, delete on
   public.stores, public.categories, public.products, public.product_units,
   public.customers, public.suppliers, public.sales, public.sale_items,
   public.debts, public.debt_payments, public.payments, public.purchases,
+  public.purchase_payments,
   public.purchase_items, public.stock_movements
 to authenticated;
 
 grant execute on function public.process_sale(uuid, jsonb, numeric, numeric, text, boolean) to authenticated;
+grant execute on function public.process_sale_with_split(uuid, jsonb, numeric, numeric, numeric, boolean) to authenticated;
 grant execute on function public.collect_debt(uuid, numeric, text) to authenticated;
+grant execute on function public.collect_debt_with_split(uuid, numeric, numeric) to authenticated;
 grant execute on function public.cancel_sale(uuid) to authenticated;
 grant execute on function public.seed_example_products() to authenticated;
 grant execute on function public.adjust_stock(uuid, numeric, text, text) to authenticated;
 grant execute on function public.process_purchase(uuid, numeric, numeric, text, text) to authenticated;
+grant execute on function public.process_purchase_with_split(uuid, numeric, numeric, text, numeric, numeric) to authenticated;
+grant execute on function public.record_purchase_payment(uuid, numeric, numeric) to authenticated;

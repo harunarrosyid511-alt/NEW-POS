@@ -245,10 +245,11 @@ a { color: inherit; }
 .summary-input input { width: 104px; min-height: 38px; padding: 6px 9px; border: 1px solid var(--control-border); border-radius: 6px; text-align: right; }
 .summary-total { display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px dashed #cbd7cc; font-size: 14px; }
 .summary-total strong { font-size: 19px; }
-.payment-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.payment-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .payment-option { display: flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--control-border); border-radius: 6px; background: white; font-size: 13px; font-weight: 700; }
 .payment-option span { color: #35533c; font-size: 11px; }
 .payment-option.chosen { border-color: #247741; color: #145e2f; background: #eef8ef; }
+.payment-split-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .transfer-note { margin: -4px 0 0; padding: 8px; border-radius: 6px; background: #f1f6f1; color: #344a39; font-size: 12px; }
 .quick-cash { display: flex; flex-wrap: wrap; gap: 6px; }
 .quick-cash button { min-height: 44px; padding: 5px 9px; border: 1px solid var(--control-border); border-radius: 6px; background: white; font-size: 12px; font-weight: 600; }
