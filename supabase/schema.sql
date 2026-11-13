@@ -228,6 +228,20 @@ create trigger on_auth_user_created_store
   after insert on auth.users
   for each row execute function public.create_store_for_new_user();
 
+insert into public.stores (user_id, name)
+select
+  id,
+  coalesce(nullif(raw_user_meta_data->>'store_name', ''), 'Toko Saya')
+from auth.users
+on conflict (user_id) do nothing;
+
+insert into public.categories (store_id, name)
+select s.id, category.name
+from public.stores s
+cross join (values ('Sembako'), ('Minuman'), ('Snack'), ('Rokok'), ('Lainnya')) as category(name)
+where exists (select 1 from auth.users u where u.id = s.user_id)
+on conflict (store_id, name) do nothing;
+
 create or replace function public.adjust_stock(
   p_product_id uuid,
   p_quantity numeric,
