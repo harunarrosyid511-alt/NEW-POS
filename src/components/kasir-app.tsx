@@ -14,7 +14,7 @@ import {
 } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { csvDownload, localDate, rupiah, tanggal } from "@/lib/format";
+import { csvDownload, dateInputValue, localDate, rupiah, tanggal, timestampOnJakartaDate } from "@/lib/format";
 import { getSupabase } from "@/lib/supabase";
 
 type Screen = "Dashboard" | "Kasir" | "Barang" | "Piutang" | "Pelanggan" | "Laporan" | "Pengaturan";
@@ -22,7 +22,7 @@ type Unit = { id: string; name: string; conversion_factor: number; sell_price: n
 type Product = {
   id: string; name: string; category_id: string | null; category_name: string; base_unit: string;
   sell_price: number; buy_price: number; stock_base: number; minimum_stock: number;
-  barcode: string | null; units: Unit[];
+  barcode: string | null; units: Unit[]; created_at?: string; updated_at?: string;
 };
 type Customer = { id: string; name: string; phone: string | null; address: string | null; notes: string | null };
 type Store = {
@@ -394,6 +394,8 @@ export function KasirApp() {
   const [received, setReceived] = useState(0);
   const [cashReceived, setCashReceived] = useState(0);
   const [transferReceived, setTransferReceived] = useState(0);
+  const [todayDate, setTodayDate] = useState("");
+  const [saleDate, setSaleDate] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"tunai" | "transfer" | "campuran">("tunai");
   const [payOldDebt, setPayOldDebt] = useState(false);
   const [customerDebt, setCustomerDebt] = useState(0);
@@ -542,6 +544,10 @@ export function KasirApp() {
 
   async function processPayment() {
     if (!supabase || !cart.length || processingPayment) return;
+    if (!saleDate || saleDate > localDate()) {
+      setNotice("Tanggal transaksi tidak boleh melebihi hari ini.");
+      return;
+    }
     const cashAmount = paymentMethod === "campuran" ? cashReceived : paymentMethod === "tunai" ? received : 0;
     const transferAmount = paymentMethod === "campuran" ? transferReceived : paymentMethod === "transfer" ? received : 0;
     const receivedAmount = cashAmount + transferAmount;
@@ -562,7 +568,7 @@ export function KasirApp() {
         if (debtError) throw debtError;
         setCustomerDebt((currentDebts ?? []).reduce((sum, debt) => sum + Number(debt.balance), 0));
       }
-      const { data, error } = await supabase.rpc("process_sale_with_split", {
+      const { data, error } = await supabase.rpc("process_sale_with_split_on_date", {
         p_customer_id: customerId || null,
         p_items: cart.map((line) => ({
           product_id: line.product.id, unit_id: line.unitId || null, quantity: line.quantity,
@@ -571,16 +577,17 @@ export function KasirApp() {
         p_cash_amount: cashAmount,
         p_transfer_amount: transferAmount,
         p_pay_old_debt: payOldDebt,
+        p_transaction_date: saleDate,
       });
       if (error) throw error;
       const result = data as {
         invoice_no: string; total: number; old_debt_paid: number; old_debt_remaining: number;
-        paid_for_sale: number; change_amount: number; status: string;
+        paid_for_sale: number; change_amount: number; status: string; created_at: string;
       };
       const cashPaid = Math.min(cashAmount, Number(result.paid_for_sale));
       const transferPaid = Number(result.paid_for_sale) - cashPaid;
       setReceipt({
-        invoice: result.invoice_no, time: new Date().toISOString(), customer: customerName, items: cart,
+        invoice: result.invoice_no, time: result.created_at, customer: customerName, items: cart,
         subtotal, discount, total: Number(result.total),
         paymentMethod: paymentMethodLabel(cashPaid, transferPaid), received: receivedAmount, cashPaid, transferPaid,
         oldDebtPaid: Number(result.old_debt_paid),
@@ -592,6 +599,7 @@ export function KasirApp() {
       setReceived(0);
       setCashReceived(0);
       setTransferReceived(0);
+      setSaleDate(localDate());
       setPayOldDebt(false);
       setCustomerId("");
       setCustomerQuery("");
@@ -642,6 +650,9 @@ export function KasirApp() {
     const form = new FormData(event.currentTarget);
     const categoryName = String(form.get("category") ?? "Lainnya").trim();
     try {
+      const recordDate = String(form.get("record_date") ?? "");
+      if (!recordDate || recordDate > localDate()) throw new Error("Pilih tanggal hari ini atau sebelumnya.");
+      const recordTimestamp = timestampOnJakartaDate(recordDate);
       const { data: categoryRow, error: categoryLookupError } = await supabase.from("categories")
         .select("id").eq("store_id", store.id).eq("name", categoryName).maybeSingle();
       if (categoryLookupError) throw categoryLookupError;
@@ -657,7 +668,7 @@ export function KasirApp() {
         barcode: String(form.get("barcode") ?? "").trim() || null,
         base_unit: String(form.get("base_unit") || "pcs").trim(),
         buy_price: Number(form.get("buy_price")), sell_price: Number(form.get("sell_price")),
-        minimum_stock: Number(form.get("minimum_stock")),
+        minimum_stock: Number(form.get("minimum_stock")), updated_at: recordTimestamp,
       };
       if (!values.name || Object.values(values).some((value) => typeof value === "number" && (!Number.isFinite(value) || value < 0))) {
         throw new Error("Periksa kembali nama, harga, stok, dan batas stok.");
@@ -666,7 +677,9 @@ export function KasirApp() {
       if (!existing && (!Number.isFinite(stock) || stock < 0)) throw new Error("Jumlah stok awal tidak valid.");
       const result = existing
         ? await supabase.from("products").update(values).eq("id", existing.id).select("id").single()
-        : await supabase.from("products").insert({ ...values, stock_base: stock }).select("id").single();
+        : await supabase.from("products").insert({
+          ...values, created_at: recordTimestamp, stock_base: stock,
+        }).select("id").single();
       if (result.error) throw result.error;
       const unitName = String(form.get("extra_unit_name") ?? "").trim();
       const factor = Number(form.get("extra_unit_factor"));
@@ -705,10 +718,13 @@ export function KasirApp() {
     const quantity = Number(form.get("quantity"));
     const direction = String(form.get("direction"));
     const reason = String(form.get("reason"));
+    const movementDate = String(form.get("movement_date") ?? "");
     if (!Number.isFinite(quantity) || quantity <= 0) { setNotice("Jumlah stok harus lebih dari nol."); return; }
+    if (!movementDate || movementDate > localDate()) { setNotice("Pilih tanggal hari ini atau sebelumnya."); return; }
     try {
-      const { error } = await supabase.rpc("adjust_stock", {
+      const { error } = await supabase.rpc("adjust_stock_on_date", {
         p_product_id: stockDialog.id, p_quantity: quantity, p_direction: direction, p_reason: reason,
+        p_movement_date: movementDate,
       });
       if (error) throw error;
       setStockDialog(null);
@@ -795,19 +811,22 @@ export function KasirApp() {
     const supplierName = String(form.get("supplier") ?? "").trim();
     const cashAmount = Number(form.get("cash_amount"));
     const transferAmount = Number(form.get("transfer_amount"));
+    const purchaseDate = String(form.get("purchase_date") ?? "");
     if (!product || quantity <= 0 || price < 0) { setNotice("Periksa produk, jumlah, dan harga kulakan."); return; }
+    if (!purchaseDate || purchaseDate > localDate()) { setNotice("Pilih tanggal hari ini atau sebelumnya."); return; }
     if (cashAmount < 0 || transferAmount < 0 || cashAmount + transferAmount > quantity * price) {
       setNotice("Jumlah pembayaran kulakan tidak boleh melebihi total.");
       return;
     }
     try {
-      const { error } = await supabase.rpc("process_purchase_with_split", {
+      const { error } = await supabase.rpc("process_purchase_with_split_on_date", {
         p_product_id: product.id,
         p_quantity: quantity,
         p_buy_price: price,
         p_supplier_name: supplierName || null,
         p_cash_amount: cashAmount,
         p_transfer_amount: transferAmount,
+        p_purchase_date: purchaseDate,
       });
       if (error) throw error;
       setPurchaseDialog(false);
@@ -999,7 +1018,7 @@ export function KasirApp() {
               <div><h2>Pilih barang</h2><p>{filteredProducts.length} barang tersedia</p></div>
               <button className="text-button" onClick={() => setScreen("Barang")}>Kelola barang</button>
             </div>
-            {!products.length && !loading ? <EmptyState title="Belum ada barang" description="Tambahkan barang sendiri atau isi daftar dengan contoh produk." action={<><button className="button button-primary" onClick={() => setProductDialog("new")}>Tambah barang</button><button className="button button-quiet" onClick={async () => {
+            {!products.length && !loading ? <EmptyState title="Belum ada barang" description="Tambahkan barang sendiri atau isi daftar dengan contoh produk." action={<>            <button className="button button-primary" onClick={() => { setTodayDate(localDate()); setProductDialog("new"); }}>Tambah barang</button><button className="button button-quiet" onClick={async () => {
               if (!supabase) return;
               const { error } = await supabase.rpc("seed_example_products");
               if (error) setNotice(error.message);
@@ -1078,12 +1097,20 @@ export function KasirApp() {
               <label className="summary-input"><span>Subtotal</span><strong>{rupiah(subtotal)}</strong></label>
               <label className="summary-input"><span>Diskon (Rp)</span><input type="number" min="0" max={subtotal} value={discount || ""} onChange={(event) => setDiscount(Number(event.target.value))} placeholder="0" /></label>
               <div className="summary-total"><span>Total belanja</span><strong>{rupiah(total)}</strong></div>
-              <button className="button button-primary button-full process-button" disabled={!cart.length} onClick={() => setPaymentStep(true)}>
+              <button className="button button-primary button-full process-button" disabled={!cart.length} onClick={() => {
+                const today = localDate();
+                setTodayDate(today);
+                setSaleDate(today);
+                setPaymentStep(true);
+              }}>
                 Lanjut ke pembayaran
               </button>
             </div>
             </>}
             {paymentStep && <div className="payment-step-content">
+              <Field label="Tanggal transaksi">
+                <input type="date" value={saleDate} max={todayDate} onChange={(event) => setSaleDate(event.target.value)} />
+              </Field>
               <div className="payment-options" role="group" aria-label="Metode pembayaran">
                 {(["tunai", "transfer", "campuran"] as const).map((method) => <button key={method} className={`payment-option ${paymentMethod === method ? "chosen" : ""}`} aria-pressed={paymentMethod === method} onClick={() => {
                   if (method === "campuran") {
@@ -1128,7 +1155,7 @@ export function KasirApp() {
         </section>}
 
         {screen === "Dashboard" && <DashboardScreen todayTotal={todayTotal} todayCount={todaySales.length} todayProfit={todayProfit} totalDebt={totalDebt} lowStock={lowStock} sales={visibleSales} products={products} saleItems={saleItems} customers={customers} onNavigate={setScreen} />}
-        {screen === "Barang" && <ProductsScreen products={products} categories={categories.filter((name) => name !== "Semua")} onAdd={() => setProductDialog("new")} onEdit={setProductDialog} onRemove={removeProduct} onStock={setStockDialog} onPurchase={() => { setPurchaseTotalPreview(0); setPurchaseDialog(true); }} onPayPurchase={setPurchasePaymentDialog} refreshPurchases={purchaseRefreshKey} supabase={supabase} storeId={store?.id ?? ""} loading={loading} />}
+        {screen === "Barang" && <ProductsScreen products={products} categories={categories.filter((name) => name !== "Semua")} onAdd={() => { setTodayDate(localDate()); setProductDialog("new"); }} onEdit={(product) => { setTodayDate(localDate()); setProductDialog(product); }} onRemove={removeProduct} onStock={(product) => { setTodayDate(localDate()); setStockDialog(product); }} onPurchase={() => { setTodayDate(localDate()); setPurchaseTotalPreview(0); setPurchaseDialog(true); }} onPayPurchase={setPurchasePaymentDialog} refreshPurchases={purchaseRefreshKey} supabase={supabase} storeId={store?.id ?? ""} loading={loading} />}
         {screen === "Piutang" && <DebtScreen debts={debts} allDebts={allDebts} storeName={store?.name ?? "Toko"} supabase={supabase} onPay={setDebtDialog} />}
         {screen === "Pelanggan" && <CustomersScreen customers={customers} debts={debts} sales={sales} onAdd={() => setCustomerDialog("new")} onEdit={setCustomerDialog} onRemove={removeCustomer} />}
         {screen === "Laporan" && <ReportsScreen sales={sales} saleItems={saleItems} salePayments={salePayments} products={products} debts={debts} supabase={supabase} onDownload={exportReport} onReceipt={async (sale) => {
@@ -1187,6 +1214,17 @@ export function KasirApp() {
           <Field label="Nama barang"><input name="name" required defaultValue={productDialog === "new" ? "" : productDialog.name} placeholder="Contoh: Mi instan" /></Field>
           <Field label="Kategori"><input name="category" list="category-options" defaultValue={productDialog === "new" ? "" : productDialog.category_name} placeholder="Pilih atau ketik kategori" required /><datalist id="category-options">{categories.filter((item) => item !== "Semua").map((item) => <option key={item}>{item}</option>)}</datalist></Field>
           <Field label="Barcode (opsional)"><input name="barcode" defaultValue={productDialog === "new" ? "" : productDialog.barcode ?? ""} /></Field>
+          <Field label="Tanggal pencatatan">
+            <input
+              name="record_date"
+              type="date"
+              max={todayDate}
+              required
+              defaultValue={productDialog === "new" || !(productDialog.updated_at || productDialog.created_at)
+                ? todayDate
+                : dateInputValue(productDialog.updated_at ?? productDialog.created_at)}
+            />
+          </Field>
           <div className="form-grid-two">
             <Field label="Satuan dasar"><input name="base_unit" required defaultValue={productDialog === "new" ? "pcs" : productDialog.base_unit} placeholder="pcs, kg, botol" /></Field>
             <Field label="Batas stok menipis"><input name="minimum_stock" type="number" min="0" step="0.001" required defaultValue={productDialog === "new" ? store?.default_min_stock ?? 5 : productDialog.minimum_stock} /></Field>
@@ -1209,6 +1247,9 @@ export function KasirApp() {
           <Field label="Perubahan"><select name="direction"><option value="tambah">Tambah stok</option><option value="kurangi">Kurangi stok</option></select></Field>
           <Field label={`Jumlah (${stockDialog.base_unit})`}><input name="quantity" type="number" min="0.001" step="0.001" required /></Field>
           <Field label="Alasan"><select name="reason"><option value="stok masuk">Stok masuk</option><option value="rusak">Rusak</option><option value="kadaluarsa">Kadaluarsa</option><option value="hilang">Hilang</option><option value="koreksi hitungan">Koreksi hitungan</option></select></Field>
+          <Field label="Tanggal perubahan">
+            <input name="movement_date" type="date" max={todayDate} defaultValue={todayDate} required />
+          </Field>
           <p className="form-hint">Stok sekarang: {stockDialog.stock_base} {stockDialog.base_unit}.</p>
           <button className="button button-primary button-full">Simpan perubahan stok</button>
         </form>
@@ -1229,6 +1270,9 @@ export function KasirApp() {
           const form = new FormData(event.currentTarget);
           setPurchaseTotalPreview(Math.round(Number(form.get("quantity")) * Number(form.get("buy_price")) * 100) / 100);
         }}>
+          <Field label="Tanggal kulakan">
+            <input name="purchase_date" type="date" max={todayDate} defaultValue={todayDate} required />
+          </Field>
           <Field label="Supplier"><input name="supplier" placeholder="Nama supplier (opsional)" /></Field>
           <Field label="Barang"><select name="product" required defaultValue=""><option value="" disabled>Pilih barang</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></Field>
           <Field label="Jumlah satuan dasar"><input name="quantity" type="number" min="0.001" step="0.001" required /></Field>
